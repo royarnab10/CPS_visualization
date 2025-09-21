@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Critical Path Schedule Visualizer</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>Critical Path Schedule Visualizer</h1>
+        <p>
+          Upload a critical path schedule to explore dependencies, expand milestones,
+          and validate the plan with your stakeholders.
+        </p>
+      </div>
+      <div class="actions">
+        <label class="file-input">
+          <span>Upload Excel (.xlsx)</span>
+          <input id="file-input" type="file" accept=".xlsx,.xls" />
+        </label>
+        <button id="load-sample" type="button">Load sample data</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="sidebar" id="sidebar">
+        <div class="panel">
+          <h2>Levels &amp; Scopes</h2>
+          <p class="panel-help">
+            Use the collapsible sections below to reveal tasks by level and scope.
+            Checking a task adds it to the network view. Hidden tasks are treated as
+            collapsed milestones.
+          </p>
+          <div id="level-controls" class="level-controls"></div>
+          <div id="hierarchy" class="hierarchy"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Task details</h2>
+          <div id="task-details" class="task-details empty">
+            <p>Select a node in the network to see its attributes here.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="visualization">
+        <div class="legend" id="legend"></div>
+        <div id="cy" class="graph"></div>
+        <div class="graph-controls">
+          <button id="fit-graph" type="button">Fit to screen</button>
+          <button id="reset-selection" type="button">Clear selection</button>
+          <label class="toggle">
+            <input type="checkbox" id="auto-expand" checked />
+            <span>Auto-include direct predecessors and successors</span>
+          </label>
+        </div>
+        <div class="dependencies" id="dependency-table"></div>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
