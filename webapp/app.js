@@ -233,14 +233,12 @@ function renderHierarchy() {
   }
 
   const hierarchyLevels = getHierarchyLevels();
-  const fragments = [];
+  const fragment = document.createDocumentFragment();
 
-  let canRender = true;
   hierarchyLevels.forEach((level, index) => {
-    if (!canRender) return;
-
     const column = document.createElement('section');
     column.className = 'hierarchy-column';
+
     const header = document.createElement('header');
     const title = document.createElement('h3');
     title.textContent = `Level ${level}`;
@@ -248,72 +246,158 @@ function renderHierarchy() {
     message.textContent =
       index === 0
         ? `Choose a Level ${level} task to begin exploring.`
-        : 'Select a task to drill into the next level.';
+        : 'Select a task to drill into the next level. Cross-level links appear when available.';
     header.append(title, message);
     column.appendChild(header);
 
-    let tasks = dataset.tasks.filter((task) => task.level === level);
+    const tasksAtLevel = dataset.tasks.filter((task) => task.level === level);
+    const previousLevel = index > 0 ? hierarchyLevels[index - 1] : null;
+    const parentSelection = previousLevel ? hierarchySelections.get(previousLevel) : null;
 
-    if (index > 0) {
-      const parentLevel = hierarchyLevels[index - 1];
-      const parentSelection = hierarchySelections.get(parentLevel);
-      if (!parentSelection) {
-        canRender = false;
-        return;
-      }
-      tasks = tasks.filter((task) => task.predecessors.includes(parentSelection));
-      if (tasks.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'empty-state soft';
-        empty.textContent = 'No downstream tasks for this milestone.';
-        column.appendChild(empty);
-        fragments.push(column);
-        canRender = false;
-        return;
-      }
+    let directTasks = [];
+    if (index === 0) {
+      directTasks = tasksAtLevel;
+    } else if (parentSelection) {
+      directTasks = tasksAtLevel.filter((task) => task.predecessors.includes(parentSelection));
     }
 
-    if (tasks.length === 0) {
+    const directTaskIds = new Set(directTasks.map((task) => task.id));
+    const relatedEntries = [];
+
+    if (selectedTaskIds.size > 0) {
+      tasksAtLevel.forEach((task) => {
+        if (directTaskIds.has(task.id)) return;
+        const dependsOnSelected = task.predecessors.some((pred) => selectedTaskIds.has(pred));
+        const feedsSelected = task.successors.some((succ) => selectedTaskIds.has(succ));
+        if (!dependsOnSelected && !feedsSelected) return;
+
+        let relationship = '';
+        if (dependsOnSelected && feedsSelected) {
+          relationship = 'Connected to selected path';
+        } else if (dependsOnSelected) {
+          relationship = 'Depends on selected task';
+        } else {
+          relationship = 'Feeds selected task';
+        }
+        relatedEntries.push({ task, relationship });
+      });
+    }
+
+    const hasDirect = directTasks.length > 0;
+    const hasRelated = relatedEntries.length > 0;
+
+    if (!hasDirect && !hasRelated) {
+      if (index > 0 && !parentSelection && selectedTaskIds.size === 0) {
+        return;
+      }
       const empty = document.createElement('div');
       empty.className = 'empty-state soft';
-      empty.textContent = 'No tasks available for this level.';
+      if (index === 0) {
+        empty.textContent = 'No tasks available for this level.';
+      } else if (parentSelection) {
+        empty.textContent = 'No downstream tasks for this milestone.';
+      } else if (selectedTaskIds.size > 0) {
+        empty.textContent = 'No cross-level tasks connect to the current path.';
+      } else {
+        empty.textContent = 'Select a task in the previous level to reveal its dependencies.';
+      }
       column.appendChild(empty);
-      fragments.push(column);
-      canRender = false;
+      fragment.appendChild(column);
       return;
     }
 
-    const list = document.createElement('div');
-    list.className = 'hierarchy-task-list';
-
-    tasks
-      .slice()
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .forEach((task) => {
-        const card = document.createElement('button');
-        card.type = 'button';
-        card.className = 'hierarchy-card';
-        if (hierarchySelections.get(level) === task.id) {
-          card.classList.add('selected');
-        }
-        card.innerHTML = `
-          <span class="title">${task.name}</span>
-          <span class="meta">#${task.id} · ${task.team || 'Unassigned'}</span>
-        `;
-        card.addEventListener('click', () => handleHierarchySelection(level, task));
-        list.appendChild(card);
-      });
-
-    column.appendChild(list);
-    fragments.push(column);
-
-    if (!hierarchySelections.has(level)) {
-      canRender = false;
+    if (hasDirect) {
+      const directGroup = document.createElement('div');
+      directGroup.className = 'hierarchy-group';
+      if (index > 0) {
+        const parentTask = parentSelection ? dataset.tasksById.get(parentSelection) : null;
+        const label = document.createElement('h4');
+        label.className = 'hierarchy-group-title';
+        label.textContent = parentTask
+          ? `Direct successors of ${parentTask.name}`
+          : 'Direct successors';
+        directGroup.appendChild(label);
+      }
+      directGroup.appendChild(buildTaskList(directTasks, level));
+      column.appendChild(directGroup);
     }
+
+    if (hasRelated) {
+      const relatedGroup = document.createElement('div');
+      relatedGroup.className = 'hierarchy-group related';
+      const label = document.createElement('h4');
+      label.className = 'hierarchy-group-title';
+      label.textContent = 'Cross-level connections';
+      relatedGroup.appendChild(label);
+
+      const relationshipByTask = new Map(
+        relatedEntries.map(({ task, relationship }) => [task.id, relationship])
+      );
+      relatedGroup.appendChild(
+        buildTaskList(
+          relatedEntries.map((entry) => entry.task),
+          level,
+          (task) => ({ relationship: relationshipByTask.get(task.id) })
+        )
+      );
+      column.appendChild(relatedGroup);
+    }
+
+    fragment.appendChild(column);
   });
 
   dom.hierarchy.innerHTML = '';
-  fragments.forEach((fragment) => dom.hierarchy.appendChild(fragment));
+  dom.hierarchy.appendChild(fragment);
+}
+
+function buildTaskList(tasks, level, optionsResolver) {
+  const list = document.createElement('div');
+  list.className = 'hierarchy-task-list';
+
+  tasks
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .forEach((task) => {
+      const options = typeof optionsResolver === 'function' ? optionsResolver(task) : undefined;
+      const card = createTaskCard(task, level, options);
+      list.appendChild(card);
+    });
+
+  return list;
+}
+
+function createTaskCard(task, level, options = {}) {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'hierarchy-card';
+
+  if (hierarchySelections.get(level) === task.id) {
+    card.classList.add('selected');
+  }
+  if (options?.relationship) {
+    card.classList.add('related');
+  }
+
+  const title = document.createElement('span');
+  title.className = 'title';
+  title.textContent = task.name;
+
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.textContent = `#${task.id} · ${task.team || 'Unassigned'}`;
+
+  card.append(title, meta);
+
+  if (options?.relationship) {
+    const badge = document.createElement('span');
+    badge.className = 'relationship-badge';
+    badge.textContent = options.relationship;
+    card.appendChild(badge);
+  }
+
+  card.addEventListener('click', () => handleHierarchySelection(level, task));
+
+  return card;
 }
 
 function getHierarchyLevels() {
@@ -381,17 +465,20 @@ function updateGraph() {
   const nodes = new Map();
   const edges = [];
   const visible = new Set(selectedTaskIds);
+  const neighborIds = new Set();
 
-  if (includeNeighbors) {
+  if (includeNeighbors && selectedTaskIds.size > 0) {
     dataset.dependencies.forEach((dep) => {
-      if (visible.has(dep.target)) {
-        visible.add(dep.source);
+      if (selectedTaskIds.has(dep.target) && !selectedTaskIds.has(dep.source)) {
+        neighborIds.add(dep.source);
       }
-      if (visible.has(dep.source)) {
-        visible.add(dep.target);
+      if (selectedTaskIds.has(dep.source) && !selectedTaskIds.has(dep.target)) {
+        neighborIds.add(dep.target);
       }
     });
   }
+
+  neighborIds.forEach((taskId) => visible.add(taskId));
 
   visible.forEach((taskId) => {
     const task = dataset.tasksById.get(taskId);
@@ -404,7 +491,7 @@ function updateGraph() {
           color,
           level: task.level,
           scope: task.scope,
-          isContext: false
+          isContext: !selectedTaskIds.has(taskId)
         }
       });
     } else {
@@ -423,6 +510,11 @@ function updateGraph() {
 
   dataset.dependencies.forEach((dep) => {
     if (!visible.has(dep.source) || !visible.has(dep.target)) return;
+
+    const touchesSelected =
+      selectedTaskIds.has(dep.source) || selectedTaskIds.has(dep.target);
+    if (!touchesSelected) return;
+
     if (!nodes.has(dep.source)) {
       nodes.set(dep.source, {
         data: {
