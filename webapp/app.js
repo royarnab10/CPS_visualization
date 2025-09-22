@@ -13,7 +13,7 @@ let selectedTaskIds = new Set();
 let hierarchySelections = new Map();
 let graphSelections = new Set();
 let cyInstance = null;
-let includeNeighbors = true;
+let showFullGraph = false;
 let selectedTask = null;
 
 const dom = {
@@ -23,16 +23,16 @@ const dom = {
   levelControls: document.getElementById('level-controls'),
   taskDetails: document.getElementById('task-details'),
   dependencyTable: document.getElementById('dependency-table'),
-  autoExpand: document.getElementById('auto-expand'),
   fitGraph: document.getElementById('fit-graph'),
   resetSelection: document.getElementById('reset-selection'),
-  legend: document.getElementById('legend')
+  legend: document.getElementById('legend'),
+  showFullGraph: document.getElementById('show-full-graph')
 };
 
 dom.fileInput.addEventListener('change', handleFileInput);
 dom.loadSample.addEventListener('click', loadSampleData);
-dom.autoExpand.addEventListener('change', () => {
-  includeNeighbors = dom.autoExpand.checked;
+dom.showFullGraph.addEventListener('change', () => {
+  showFullGraph = dom.showFullGraph.checked;
   updateGraph();
 });
 dom.fitGraph.addEventListener('click', () => cyInstance && cyInstance.fit(undefined, 40));
@@ -91,6 +91,11 @@ function prepareDataset(records, label) {
     dependencies,
     levels
   };
+
+  if (dom.showFullGraph) {
+    dom.showFullGraph.checked = false;
+  }
+  showFullGraph = false;
 
   renderLegend();
   renderLevelControls();
@@ -192,9 +197,10 @@ function renderLegend() {
     })
     .join('');
 
-  const context = `<span class="legend-item"><span class="legend-swatch" style="background:transparent;border:2px dashed rgba(255,255,255,0.6);"></span>Auto-added context</span>`;
+  const context = `<span class="legend-item"><span class="legend-swatch" style="background:transparent;border:2px dashed rgba(148,163,184,0.8);"></span>Connected context</span>`;
+  const dimmed = '<span class="legend-item"><span class="legend-swatch" style="background:rgba(148,163,184,0.4);border:1px solid rgba(148,163,184,0.6);"></span>Dimmed outside focus</span>';
 
-  dom.legend.innerHTML = items + context;
+  dom.legend.innerHTML = items + context + dimmed;
 }
 
 function renderLevelControls() {
@@ -546,34 +552,61 @@ function updateGraph() {
 
   const nodes = new Map();
   const edges = [];
-  const visible = new Set(selectedTaskIds);
-  const neighborIds = new Set();
+  const focusIds = new Set(selectedTaskIds);
+  const visible = new Set();
+  const highlightNodes = new Set(focusIds);
+  const highlightEdges = new Set();
+  const hasFocus = focusIds.size > 0;
 
-  if (includeNeighbors && selectedTaskIds.size > 0) {
+  if (showFullGraph) {
+    dataset.tasks.forEach((task) => visible.add(task.id));
     dataset.dependencies.forEach((dep) => {
-      if (selectedTaskIds.has(dep.target) && !selectedTaskIds.has(dep.source)) {
-        neighborIds.add(dep.source);
-      }
-      if (selectedTaskIds.has(dep.source) && !selectedTaskIds.has(dep.target)) {
-        neighborIds.add(dep.target);
+      visible.add(dep.source);
+      visible.add(dep.target);
+    });
+  } else {
+    focusIds.forEach((id) => visible.add(id));
+    if (hasFocus) {
+      dataset.dependencies.forEach((dep) => {
+        if (focusIds.has(dep.source)) {
+          visible.add(dep.target);
+        }
+        if (focusIds.has(dep.target)) {
+          visible.add(dep.source);
+        }
+      });
+    }
+  }
+
+  if (hasFocus) {
+    dataset.dependencies.forEach((dep) => {
+      if (focusIds.has(dep.source) || focusIds.has(dep.target)) {
+        const edgeId = `${dep.source}->${dep.target}`;
+        highlightEdges.add(edgeId);
+        highlightNodes.add(dep.source);
+        highlightNodes.add(dep.target);
       }
     });
   }
 
-  neighborIds.forEach((taskId) => visible.add(taskId));
-
-  visible.forEach((taskId) => {
+  const ensureNode = (taskId) => {
+    if (nodes.has(taskId)) return;
     const task = dataset.tasksById.get(taskId);
+    const isFocus = focusIds.has(taskId);
+    const isHighlighted = highlightNodes.has(taskId);
+    const isDimmed = showFullGraph && hasFocus && !isHighlighted;
+
     if (task) {
-      const color = levelColor(task.level);
       nodes.set(taskId, {
         data: {
           id: taskId,
           label: formatNodeLabel(task.name, taskId),
-          color,
+          color: levelColor(task.level),
           level: task.level,
           scope: task.scope,
-          isContext: !selectedTaskIds.has(taskId)
+          isFocus,
+          isNeighbor: !isFocus && isHighlighted,
+          isDimmed
         }
       });
     } else {
@@ -584,49 +617,41 @@ function updateGraph() {
           color: '#94a3b8',
           level: 0,
           scope: 'External',
-          isContext: true
+          isFocus: false,
+          isNeighbor: isHighlighted,
+          isDimmed,
+          isExternal: true
         }
       });
     }
-  });
+  };
+
+  visible.forEach((taskId) => ensureNode(taskId));
 
   dataset.dependencies.forEach((dep) => {
-    if (!visible.has(dep.source) || !visible.has(dep.target)) return;
-
-    const touchesSelected =
-      selectedTaskIds.has(dep.source) || selectedTaskIds.has(dep.target);
-    if (!touchesSelected) return;
-
-    if (!nodes.has(dep.source)) {
-      nodes.set(dep.source, {
-        data: {
-          id: dep.source,
-          label: formatNodeLabel(`External ${dep.source}`, dep.source),
-          color: '#94a3b8',
-          level: dep.sourceLevel || 0,
-          scope: 'External',
-          isContext: true
-        }
-      });
+    if (!visible.has(dep.source) || !visible.has(dep.target)) {
+      return;
     }
-    if (!nodes.has(dep.target)) {
-      nodes.set(dep.target, {
-        data: {
-          id: dep.target,
-          label: formatNodeLabel(`External ${dep.target}`, dep.target),
-          color: '#94a3b8',
-          level: dep.targetLevel || 0,
-          scope: 'External',
-          isContext: true
-        }
-      });
+
+    const edgeId = `${dep.source}->${dep.target}`;
+
+    if (!showFullGraph && !hasFocus) {
+      return;
     }
+    if (!showFullGraph && hasFocus && !highlightEdges.has(edgeId)) {
+      return;
+    }
+
+    ensureNode(dep.source);
+    ensureNode(dep.target);
+
     edges.push({
       data: {
-        id: `${dep.source}->${dep.target}`,
+        id: edgeId,
         source: dep.source,
         target: dep.target,
-        type: dep.type
+        type: dep.type,
+        isDimmed: showFullGraph && hasFocus && !highlightEdges.has(edgeId)
       }
     });
   });
@@ -665,12 +690,24 @@ function updateGraph() {
           }
         },
         {
-          selector: 'node[?isContext]',
+          selector: 'node[?isNeighbor]',
           style: {
             'border-style': 'dashed',
-            'opacity': 0.65,
-            'background-opacity': 0.4,
+            'opacity': 0.75,
+            'background-opacity': 0.5,
             'color': '#1f2937'
+          }
+        },
+        {
+          selector: 'node[?isDimmed]',
+          style: {
+            'opacity': 0.28,
+            'background-opacity': 0.18,
+            'color': '#475569',
+            'text-opacity': 0.45,
+            'border-color': 'rgba(148,163,184,0.35)',
+            'shadow-blur': 0,
+            'text-outline-opacity': 0
           }
         },
         {
@@ -697,6 +734,15 @@ function updateGraph() {
             'text-background-opacity': 1,
             'text-background-padding': 3,
             'text-background-shape': 'roundrectangle'
+          }
+        },
+        {
+          selector: 'edge[?isDimmed]',
+          style: {
+            'opacity': 0.2,
+            'line-color': 'rgba(148,163,184,0.25)',
+            'target-arrow-color': 'rgba(148,163,184,0.35)',
+            'text-opacity': 0
           }
         },
         {
