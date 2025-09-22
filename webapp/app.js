@@ -209,8 +209,10 @@ function renderLegend() {
     })
     .join('');
 
-  const context = `<span class="legend-item"><span class="legend-swatch" style="background:transparent;border:2px dashed rgba(148,163,184,0.8);"></span>Connected context</span>`;
-  const dimmed = '<span class="legend-item"><span class="legend-swatch" style="background:rgba(148,163,184,0.4);border:1px solid rgba(148,163,184,0.6);"></span>Dimmed outside focus</span>';
+  const context =
+    '<span class="legend-item"><span class="legend-swatch" style="background:transparent;border:2px dashed rgba(148,163,184,0.8);"></span>Connected context</span>';
+  const dimmed =
+    '<span class="legend-item"><span class="legend-swatch" style="background:rgba(148,163,184,0.4);border:1px solid rgba(148,163,184,0.6);"></span>Dimmed outside focus</span>';
 
   dom.legend.innerHTML = items + context + dimmed;
 }
@@ -849,7 +851,8 @@ function wrapText(text, maxLineLength = 18) {
 function renderTaskDetails() {
   if (!selectedTask) {
     dom.taskDetails.classList.add('empty');
-    dom.taskDetails.innerHTML = '<p>Select a node in the network to see its attributes here.</p>';
+    dom.taskDetails.innerHTML =
+      '<p>Select a task from the hierarchy or network to edit its fields, remove it, or manage its dependencies.</p>';
     return;
   }
 
@@ -1038,7 +1041,7 @@ function renderDependencies() {
   if (dom.dependencyFocus) {
     if (!selectedTask) {
       dom.dependencyFocus.innerHTML =
-        '<p class="empty-state soft">Select a task in the hierarchy or network to preview its dependency chain.</p>';
+        '<p class="empty-state soft">Select a task in the hierarchy or network to preview its dependency chain. Click edges in the graph to request removal of a link.</p>';
     } else if (selectedTask.placeholder) {
       dom.dependencyFocus.innerHTML = `
         <div class="dependency-focus-card">
