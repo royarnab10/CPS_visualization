@@ -96,7 +96,8 @@ function prepareDataset(records, label) {
     tasks,
     tasksById,
     dependencies,
-    levels
+    levels,
+    modified: false
   };
 
   if (dom.dependencyPanel) {
@@ -795,6 +796,8 @@ function updateGraph() {
       toggleGraphSelection(nodeId);
     });
 
+    cyInstance.on('tap', 'edge', handleEdgeTap);
+
     cyInstance.on('tap', (evt) => {
       if (evt.target === cyInstance) {
         selectedTask = null;
@@ -860,31 +863,142 @@ function renderTaskDetails() {
     return;
   }
 
-  const critical = selectedTask.critical
-    ? '<span class="status-pill critical">Critical</span>'
-    : '<span class="status-pill">Non-critical</span>';
-  const learning = selectedTask.learningPlan
-    ? '<span class="status-pill learning">Learning plan</span>'
-    : '';
+  const task = dataset?.tasksById.get(selectedTask.id);
+  if (!task) {
+    dom.taskDetails.innerHTML = `
+      <h3>Task unavailable</h3>
+      <p>The selected task is no longer part of the working dataset.</p>
+    `;
+    return;
+  }
 
-  dom.taskDetails.innerHTML = `
-    <h3>${selectedTask.name}</h3>
-    <p>${critical} ${learning}</p>
-    <dl>
-      <dt>Task ID</dt><dd>${selectedTask.id}</dd>
-      <dt>Level</dt><dd>${selectedTask.levelLabel}</dd>
-      <dt>Sub-team</dt><dd>${selectedTask.team || '—'}</dd>
-      <dt>Function</dt><dd>${selectedTask.function || '—'}</dd>
-      <dt>Scope</dt><dd>${selectedTask.scope}</dd>
-      <dt>Predecessors</dt><dd>${formatList(selectedTask.predecessors)}</dd>
-      <dt>Successors</dt><dd>${formatList(selectedTask.successors)}</dd>
-    </dl>
-  `;
+  selectedTask = task;
+
+  const form = buildTaskEditForm(task);
+  dom.taskDetails.innerHTML = '';
+  dom.taskDetails.appendChild(form);
 }
 
-function formatList(items) {
-  if (!items || items.length === 0) return '—';
-  return items.join(', ');
+function buildTaskEditForm(task) {
+  const form = document.createElement('form');
+  form.className = 'task-edit-form';
+  form.noValidate = true;
+
+  form.innerHTML = `
+    <div class="task-form-header">
+      <div>
+        <h3>${escapeHtml(task.name)}</h3>
+        <div class="task-form-meta">Task ID <strong>#${escapeHtml(task.id)}</strong> · Level ${escapeHtml(
+          task.levelLabel
+        )}</div>
+      </div>
+      <div class="task-form-actions">
+        <button type="submit" class="save-button" data-role="save" disabled>Save changes</button>
+        <button type="button" class="delete-button" data-role="delete">Delete task</button>
+      </div>
+    </div>
+    <div class="task-form-grid">
+      <label class="task-field">
+        <span>Task name</span>
+        <input name="taskName" type="text" value="${escapeHtml(task.name)}" />
+      </label>
+      <label class="task-field">
+        <span>Responsible sub-team</span>
+        <input name="responsibleTeam" type="text" value="${escapeHtml(task.team || '')}" />
+      </label>
+      <label class="task-field">
+        <span>Responsible function</span>
+        <input name="responsibleFunction" type="text" value="${escapeHtml(task.function || '')}" />
+      </label>
+      <label class="task-field">
+        <span>Scope</span>
+        <input name="scope" type="text" value="${escapeHtml(task.scope || '')}" />
+      </label>
+      <label class="task-field">
+        <span>Level label</span>
+        <input name="levelLabel" type="text" value="${escapeHtml(task.levelLabel)}" />
+      </label>
+      <label class="task-field">
+        <span>Level number</span>
+        <input name="level" type="number" min="1" value="${escapeHtml(task.level)}" />
+      </label>
+      <div class="task-boolean-group">
+        <label class="task-checkbox">
+          <input name="critical" type="checkbox" ${task.critical ? 'checked' : ''} />
+          <span>Critical path task</span>
+        </label>
+        <label class="task-checkbox">
+          <input name="learningPlan" type="checkbox" ${task.learningPlan ? 'checked' : ''} />
+          <span>Has learning plan</span>
+        </label>
+      </div>
+      <label class="task-field">
+        <span>Predecessors (comma separated)</span>
+        <input name="predecessors" type="text" value="${escapeHtml(task.predecessors.join(', '))}" />
+      </label>
+      <label class="task-field">
+        <span>Dependency types (match predecessors order)</span>
+        <input name="dependencyTypes" type="text" value="${escapeHtml(task.dependencyTypes.join(', '))}" />
+        <small class="task-field-hint">Defaults to FS when left blank.</small>
+      </label>
+      <label class="task-field">
+        <span>Successors (comma separated)</span>
+        <input name="successors" type="text" value="${escapeHtml(task.successors.join(', '))}" />
+      </label>
+    </div>
+  `;
+
+  const saveButton = form.querySelector('[data-role="save"]');
+  const deleteButton = form.querySelector('[data-role="delete"]');
+  const initialState = getTaskFormState(form);
+
+  const updateSaveState = () => {
+    const currentState = getTaskFormState(form);
+    const dirty = hasTaskFormChanges(initialState, currentState);
+    saveButton.disabled = !dirty;
+    saveButton.classList.toggle('dirty', dirty);
+  };
+
+  form.addEventListener('input', updateSaveState);
+  form.addEventListener('change', updateSaveState);
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const nextState = getTaskFormState(form);
+    if (!hasTaskFormChanges(initialState, nextState)) {
+      return;
+    }
+    applyTaskEdits(task.id, nextState);
+  });
+
+  deleteButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    requestTaskDeletion(task.id);
+  });
+
+  updateSaveState();
+  return form;
+}
+
+function getTaskFormState(form) {
+  const formData = new FormData(form);
+  return {
+    taskName: (formData.get('taskName') || '').toString().trim(),
+    responsibleTeam: (formData.get('responsibleTeam') || '').toString().trim(),
+    responsibleFunction: (formData.get('responsibleFunction') || '').toString().trim(),
+    scope: (formData.get('scope') || '').toString().trim(),
+    levelLabel: (formData.get('levelLabel') || '').toString().trim(),
+    level: (formData.get('level') || '').toString().trim(),
+    critical: form.querySelector('input[name="critical"]').checked,
+    learningPlan: form.querySelector('input[name="learningPlan"]').checked,
+    predecessors: (formData.get('predecessors') || '').toString().trim(),
+    dependencyTypes: (formData.get('dependencyTypes') || '').toString().trim(),
+    successors: (formData.get('successors') || '').toString().trim()
+  };
+}
+
+function hasTaskFormChanges(initialState, currentState) {
+  return Object.keys(initialState).some((key) => initialState[key] !== currentState[key]);
 }
 
 function renderDependencies() {
@@ -1021,6 +1135,350 @@ function renderDependencies() {
   `;
 
   dom.dependencyTable.innerHTML = table;
+}
+
+function applyTaskEdits(taskId, state) {
+  if (!dataset) return false;
+  const task = dataset.tasksById.get(taskId);
+  if (!task) return false;
+
+  const name = state.taskName;
+  if (!name) {
+    alert('Task name cannot be empty.');
+    return false;
+  }
+
+  const levelNumber = Number(state.level) || parseLevel(state.levelLabel || task.levelLabel);
+  const levelLabel = state.levelLabel || `L${levelNumber}`;
+
+  const predecessorIds = splitIds(state.predecessors);
+  const dependencyTypesRaw = splitIds(state.dependencyTypes).map((type) => type.toUpperCase());
+  const dependencyTypes = predecessorIds.map((_, idx) => {
+    const resolved = dependencyTypesRaw[idx] || dependencyTypesRaw[0] || 'FS';
+    return resolved || 'FS';
+  });
+
+  const successorIds = splitIds(state.successors);
+
+  const oldPredecessors = [...task.predecessors];
+  const oldSuccessors = [...task.successors];
+
+  task.name = name;
+  task.team = state.responsibleTeam;
+  task.function = state.responsibleFunction;
+  task.scope = state.scope || 'Unscoped';
+  task.level = Math.max(1, levelNumber || task.level || 1);
+  task.levelLabel = levelLabel;
+  task.critical = Boolean(state.critical);
+  task.learningPlan = Boolean(state.learningPlan);
+  task.predecessors = predecessorIds;
+  task.dependencyTypes = dependencyTypes;
+  task.successors = successorIds;
+
+  updateTaskRaw(task);
+  syncPredecessorRelationships(task, oldPredecessors, predecessorIds);
+  syncSuccessorRelationships(task, oldSuccessors, successorIds);
+
+  afterDatasetMutation(`Task "${task.name}" updated.`);
+  return true;
+}
+
+function syncPredecessorRelationships(task, previous, next) {
+  const nextSet = new Set(next);
+
+  previous.forEach((predId) => {
+    if (nextSet.has(predId)) return;
+    const predecessor = dataset.tasksById.get(predId);
+    if (!predecessor) return;
+    predecessor.successors = predecessor.successors.filter((id) => id !== task.id);
+    updateTaskRaw(predecessor);
+  });
+
+  next.forEach((predId) => {
+    const predecessor = dataset.tasksById.get(predId);
+    if (!predecessor) return;
+    if (!predecessor.successors.includes(task.id)) {
+      predecessor.successors.push(task.id);
+      updateTaskRaw(predecessor);
+    }
+  });
+}
+
+function syncSuccessorRelationships(task, previous, next) {
+  const nextSet = new Set(next);
+
+  previous.forEach((succId) => {
+    if (nextSet.has(succId)) return;
+    const successor = dataset.tasksById.get(succId);
+    if (!successor) return;
+    for (let i = successor.predecessors.length - 1; i >= 0; i -= 1) {
+      if (successor.predecessors[i] === task.id) {
+        successor.predecessors.splice(i, 1);
+        successor.dependencyTypes.splice(i, 1);
+      }
+    }
+    updateTaskRaw(successor);
+  });
+
+  next.forEach((succId) => {
+    const successor = dataset.tasksById.get(succId);
+    if (!successor) return;
+    if (!successor.predecessors.includes(task.id)) {
+      successor.predecessors.push(task.id);
+      successor.dependencyTypes.push(task.dependencyTypes[0] || 'FS');
+      updateTaskRaw(successor);
+    }
+  });
+}
+
+function requestTaskDeletion(taskId) {
+  if (!dataset) return;
+  const task = dataset.tasksById.get(taskId);
+  if (!task) return;
+
+  const affectedIds = new Set();
+  dataset.tasks.forEach((entry) => {
+    if (entry.predecessors.includes(taskId) || entry.successors.includes(taskId)) {
+      affectedIds.add(entry.id);
+    }
+  });
+
+  const affectedList = Array.from(affectedIds)
+    .map((id) => ` - ${describeTaskById(id)}`)
+    .join('\n');
+
+  const approval = window.confirm(
+    `Deleting ${describeTaskById(taskId)} will remove the task and all of its dependencies.` +
+      (affectedList ? `\n\nDependent tasks impacted:\n${affectedList}` : '\n\nNo other tasks reference this node.') +
+      '\n\nDo you approve this deletion?'
+  );
+
+  if (!approval) return;
+  deleteTaskById(taskId);
+}
+
+function deleteTaskById(taskId) {
+  const index = dataset.tasks.findIndex((task) => task.id === taskId);
+  if (index === -1) return;
+  const [removedTask] = dataset.tasks.splice(index, 1);
+  dataset.tasksById.delete(taskId);
+
+  dataset.tasks.forEach((task) => {
+    let changed = false;
+    for (let i = task.predecessors.length - 1; i >= 0; i -= 1) {
+      if (task.predecessors[i] === taskId) {
+        task.predecessors.splice(i, 1);
+        task.dependencyTypes.splice(i, 1);
+        changed = true;
+      }
+    }
+    const successorIndex = task.successors.indexOf(taskId);
+    if (successorIndex !== -1) {
+      task.successors.splice(successorIndex, 1);
+      changed = true;
+    }
+    if (changed) {
+      updateTaskRaw(task);
+    }
+  });
+
+  if (selectedTask && selectedTask.id === taskId) {
+    selectedTask = null;
+  }
+
+  hierarchySelections.forEach((value, level) => {
+    if (value === taskId) {
+      hierarchySelections.delete(level);
+    }
+  });
+  graphSelections.delete(taskId);
+  rebuildSelectedTaskIds();
+
+  afterDatasetMutation(`Task "${removedTask.name}" deleted.`);
+}
+
+function handleEdgeTap(evt) {
+  if (!dataset) return;
+  const edge = evt.target;
+  const sourceId = edge.data('source');
+  const targetId = edge.data('target');
+
+  const affectedIds = new Set([targetId]);
+  dataset.tasks.forEach((task) => {
+    if (task.predecessors.includes(targetId)) {
+      affectedIds.add(task.id);
+    }
+  });
+
+  const affectedList = Array.from(affectedIds)
+    .map((id) => ` - ${describeTaskById(id)}`)
+    .join('\n');
+
+  const approval = window.confirm(
+    `Removing the dependency ${describeTaskById(sourceId)} → ${describeTaskById(targetId)} will detach the following tasks:` +
+      (affectedList ? `\n\n${affectedList}` : '\n\nNo downstream tasks are linked to this dependency.') +
+      '\n\nDo you approve this change?'
+  );
+
+  if (!approval) return;
+  removeDependency(sourceId, targetId);
+}
+
+function removeDependency(sourceId, targetId) {
+  const targetTask = dataset.tasksById.get(targetId);
+  if (!targetTask) return;
+
+  const sourceTask = dataset.tasksById.get(sourceId);
+  let removed = false;
+
+  for (let i = targetTask.predecessors.length - 1; i >= 0; i -= 1) {
+    if (targetTask.predecessors[i] === sourceId) {
+      targetTask.predecessors.splice(i, 1);
+      targetTask.dependencyTypes.splice(i, 1);
+      removed = true;
+    }
+  }
+  updateTaskRaw(targetTask);
+
+  if (sourceTask) {
+    const filtered = sourceTask.successors.filter((id) => id !== targetId);
+    if (filtered.length !== sourceTask.successors.length) {
+      sourceTask.successors = filtered;
+      updateTaskRaw(sourceTask);
+      removed = true;
+    }
+  }
+
+  if (removed) {
+    afterDatasetMutation(`Removed dependency ${describeTaskById(sourceId)} → ${describeTaskById(targetId)}.`);
+  }
+}
+
+function describeTaskById(taskId) {
+  if (!dataset) return `Task ${taskId}`;
+  const task = dataset.tasksById.get(taskId);
+  if (!task) {
+    return `External task ${taskId}`;
+  }
+  return `${task.name} (#${task.id})`;
+}
+
+function afterDatasetMutation(actionDescription) {
+  if (!dataset) return;
+  dataset.modified = true;
+  refreshDatasetIndexes();
+  cleanupSelections();
+  rebuildSelectedTaskIds();
+
+  renderLegend();
+  renderLevelControls();
+  renderHierarchy();
+  renderDependencies();
+  updateGraph();
+  renderTaskDetails();
+
+  promptForDownload(actionDescription);
+}
+
+function refreshDatasetIndexes() {
+  dataset.tasksById = new Map(dataset.tasks.map((task) => [task.id, task]));
+  dataset.dependencies = buildDependencies(dataset.tasks);
+  dataset.levels = Array.from(new Set(dataset.tasks.map((task) => task.level))).sort((a, b) => a - b);
+}
+
+function cleanupSelections() {
+  hierarchySelections.forEach((taskId, level) => {
+    if (!dataset.tasksById.has(taskId)) {
+      hierarchySelections.delete(level);
+    }
+  });
+
+  graphSelections = new Set([...graphSelections].filter((taskId) => dataset.tasksById.has(taskId)));
+
+  if (selectedTask && !selectedTask.placeholder) {
+    const updatedTask = dataset.tasksById.get(selectedTask.id);
+    if (updatedTask) {
+      selectedTask = updatedTask;
+    } else {
+      selectedTask = null;
+    }
+  }
+}
+
+function promptForDownload(actionDescription) {
+  if (!dataset) return;
+  const label = dataset.label || 'schedule';
+  const approval = window.confirm(
+    `${actionDescription}\n\nA temporary working copy of "${label}" has been updated.` +
+      '\nSelect OK to download the latest Excel file now, or Cancel to continue editing.'
+  );
+  if (approval) {
+    exportDatasetToExcel();
+  }
+}
+
+function exportDatasetToExcel() {
+  if (!dataset) return;
+  const rows = dataset.tasks.map((task) => ({
+    'Task ID': task.id,
+    'Task Name': task.name,
+    'Task Level': task.levelLabel || `L${task.level}`,
+    'Responsible Sub-team': task.team || '',
+    'Responsible Function': task.function || '',
+    Scope: task.scope || '',
+    Learning_Plan: task.learningPlan ? 'Yes' : 'No',
+    Critical: task.critical ? 'Yes' : 'No',
+    'Predecessors IDs': task.predecessors.join(', '),
+    'Successors IDs': task.successors.join(', '),
+    'Dependency Types': task.dependencyTypes.join(', ')
+  }));
+
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Tasks');
+  XLSX.writeFile(workbook, generateDownloadFilename());
+}
+
+function generateDownloadFilename() {
+  const label = dataset?.label || 'schedule';
+  const safe = label.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
+  return `${safe || 'schedule'}_edited.xlsx`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function updateTaskRaw(task) {
+  if (!task.raw) {
+    task.raw = {};
+  }
+  setRawField(task.raw, ['Task Name', 'Name'], task.name || '');
+  setRawField(task.raw, ['TaskId', 'Task ID', 'ID'], task.id || '');
+  setRawField(task.raw, ['Task Level', 'Level'], task.levelLabel || `L${task.level}`);
+  setRawField(task.raw, ['Responsible Sub-team', 'Sub-team'], task.team || '');
+  setRawField(task.raw, ['Responsible Function', 'Function'], task.function || '');
+  setRawField(task.raw, ['SCOPE', 'Scope'], task.scope || '');
+  setRawField(task.raw, ['Learning_Plan', 'Learning Plan'], task.learningPlan ? 'Yes' : 'No');
+  setRawField(task.raw, ['Critical', 'Is Critical'], task.critical ? 'Yes' : 'No');
+  setRawField(task.raw, ['Predecessors IDs', 'Predecessor IDs', 'Predecessors'], task.predecessors.join(', '));
+  setRawField(task.raw, ['Successors IDs', 'Successor IDs', 'Successors'], task.successors.join(', '));
+  setRawField(task.raw, ['Dependency Type', 'Dependency Types'], task.dependencyTypes.join(', '));
+}
+
+function setRawField(raw, keys, value) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(raw, key)) {
+      raw[key] = value;
+      return;
+    }
+  }
+  raw[keys[0]] = value;
 }
 
 window.addEventListener('resize', () => {

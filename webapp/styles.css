@@ -387,6 +387,146 @@ button:active,
   margin: 0;
 }
 
+.task-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.task-form-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  align-items: flex-start;
+}
+
+.task-form-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.task-form-meta {
+  font-size: 0.8rem;
+  color: rgba(15, 23, 42, 0.65);
+  margin-top: 0.2rem;
+}
+
+.task-form-meta strong {
+  color: rgba(15, 23, 42, 0.85);
+}
+
+.task-form-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.task-form-actions .save-button,
+.task-form-actions .delete-button {
+  font-size: 0.85rem;
+  padding: 0.55rem 1.1rem;
+}
+
+.save-button {
+  background: rgba(37, 99, 235, 0.15);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+.save-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.save-button.dirty {
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.25);
+}
+
+.delete-button {
+  background: #ef4444;
+  box-shadow: 0 8px 18px rgba(239, 68, 68, 0.25);
+}
+
+.delete-button:hover {
+  box-shadow: 0 12px 22px rgba(239, 68, 68, 0.35);
+}
+
+.task-form-grid {
+  display: grid;
+  gap: 0.9rem;
+}
+
+@media (min-width: 640px) {
+  .task-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .task-field:nth-last-child(-n + 3) {
+    grid-column: 1 / -1;
+  }
+
+  .task-boolean-group {
+    grid-column: 1 / -1;
+  }
+}
+
+.task-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.task-field span {
+  font-weight: 600;
+  color: rgba(15, 23, 42, 0.7);
+}
+
+.task-field input {
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  border-radius: 0.65rem;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.85rem;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.task-field input:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.3);
+  border-color: rgba(37, 99, 235, 0.45);
+}
+
+.task-field-hint {
+  font-size: 0.7rem;
+  color: rgba(15, 23, 42, 0.5);
+}
+
+.task-boolean-group {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 0.85rem;
+  border-radius: 0.75rem;
+  border: 1px dashed rgba(148, 163, 184, 0.6);
+  background: rgba(226, 232, 240, 0.35);
+}
+
+.task-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  color: rgba(15, 23, 42, 0.75);
+}
+
+.task-checkbox input {
+  width: 18px;
+  height: 18px;
+}
+
 .visualization {
   display: flex;
   flex-direction: column;
