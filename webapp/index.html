@@ -33,13 +33,14 @@
     <main class="layout">
       <section class="sidebar" id="sidebar">
         <div class="panel">
-          <h2>Levels &amp; Scopes</h2>
+          <h2>Hierarchy explorer</h2>
           <p class="panel-help">
-            Use the collapsible sections below to reveal tasks by level and scope.
-            Checking a task adds it to the network view. Hidden tasks are treated as
-            collapsed milestones.
+            Begin with the Level 2 milestones. Selecting a card reveals the dependent
+            work in the next level, letting you trace the critical path step by step.
           </p>
+          <div class="panel-subhead">Current path</div>
           <div id="level-controls" class="level-controls"></div>
+          <div class="panel-subhead">Available tasks</div>
           <div id="hierarchy" class="hierarchy"></div>
         </div>
 

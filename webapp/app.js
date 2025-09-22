@@ -10,7 +10,7 @@ const levelPalette = [
 
 let dataset = null;
 let selectedTaskIds = new Set();
-let levelState = new Map();
+let hierarchySelections = new Map();
 let cyInstance = null;
 let includeNeighbors = true;
 let selectedTask = null;
@@ -38,9 +38,15 @@ dom.fitGraph.addEventListener('click', () => cyInstance && cyInstance.fit(undefi
 dom.resetSelection.addEventListener('click', () => {
   if (cyInstance) {
     cyInstance.elements().unselect();
-    selectedTask = null;
-    renderTaskDetails();
   }
+  hierarchySelections.clear();
+  rebuildSelectedTaskIds();
+  selectedTask = null;
+  renderLevelControls();
+  renderHierarchy();
+  renderDependencies();
+  updateGraph();
+  renderTaskDetails();
 });
 
 async function handleFileInput(event) {
@@ -70,10 +76,10 @@ function prepareDataset(records, label) {
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   const dependencies = buildDependencies(tasks);
   const levels = Array.from(new Set(tasks.map((t) => t.level))).sort((a, b) => a - b);
-  const minLevel = Math.min(...levels);
 
-  selectedTaskIds = new Set(tasks.filter((t) => t.level === minLevel).map((t) => t.id));
-  levelState = new Map(levels.map((lvl) => [lvl, lvl === minLevel ? 'all' : 'none']));
+  selectedTaskIds = new Set();
+  hierarchySelections = new Map();
+  selectedTask = null;
 
   dataset = {
     label,
@@ -194,45 +200,30 @@ function renderLevelControls() {
     return;
   }
 
-  dom.levelControls.innerHTML = '';
+  const entries = Array.from(hierarchySelections.entries()).sort((a, b) => a[0] - b[0]);
 
-  dataset.levels.forEach((level, idx) => {
-    if (!levelState.has(level)) {
-      levelState.set(level, 'none');
-    }
-    const state = levelState.get(level);
-    const pill = document.createElement('label');
-    pill.className = `level-pill ${state === 'all' ? 'active' : ''}`;
+  if (entries.length === 0) {
+    dom.levelControls.innerHTML = '<p class="empty-state">Select a starting task to explore downstream milestones.</p>';
+    return;
+  }
 
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = state === 'all';
-    checkbox.indeterminate = state === 'partial';
-    checkbox.addEventListener('change', () => {
-      if (checkbox.checked) {
-        levelState.set(level, 'all');
-        dataset.tasks
-          .filter((task) => task.level === level)
-          .forEach((task) => selectedTaskIds.add(task.id));
-      } else {
-        levelState.set(level, 'none');
-        dataset.tasks
-          .filter((task) => task.level === level)
-          .forEach((task) => selectedTaskIds.delete(task.id));
-      }
-      renderLevelControls();
-      renderHierarchy();
-      renderDependencies();
-      updateGraph();
-    });
+  const wrapper = document.createElement('div');
+  wrapper.className = 'selection-path';
 
-    const swatch = document.createElement('span');
-    swatch.className = 'legend-swatch';
-    swatch.style.background = levelColor(level, idx);
+  entries.forEach(([level, taskId]) => {
+    const task = dataset.tasksById.get(taskId);
+    if (!task) return;
 
-    pill.append(checkbox, swatch, document.createTextNode(`L${level}`));
-    dom.levelControls.appendChild(pill);
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'path-chip';
+    chip.innerHTML = `<span>L${level}</span><strong>${task.name}</strong>`;
+    chip.addEventListener('click', () => clearHierarchyFrom(level));
+    wrapper.appendChild(chip);
   });
+
+  dom.levelControls.innerHTML = '';
+  dom.levelControls.appendChild(wrapper);
 }
 
 function renderHierarchy() {
@@ -241,104 +232,146 @@ function renderHierarchy() {
     return;
   }
 
-  const levels = new Map();
-  dataset.tasks.forEach((task) => {
-    if (!levels.has(task.level)) {
-      levels.set(task.level, new Map());
-    }
-    const scopes = levels.get(task.level);
-    if (!scopes.has(task.scope)) {
-      scopes.set(task.scope, []);
-    }
-    scopes.get(task.scope).push(task);
-  });
-
+  const hierarchyLevels = getHierarchyLevels();
   const fragments = [];
-  const sortedLevels = Array.from(levels.keys()).sort((a, b) => a - b);
 
-  sortedLevels.forEach((level) => {
-    const scopes = levels.get(level);
-    const scopeEntries = Array.from(scopes.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  let canRender = true;
+  hierarchyLevels.forEach((level, index) => {
+    if (!canRender) return;
 
-    const levelDetails = document.createElement('details');
-    levelDetails.open = levelState.get(level) !== 'none';
+    const column = document.createElement('section');
+    column.className = 'hierarchy-column';
+    const header = document.createElement('header');
+    const title = document.createElement('h3');
+    title.textContent = `Level ${level}`;
+    const message = document.createElement('p');
+    message.textContent =
+      index === 0
+        ? `Choose a Level ${level} task to begin exploring.`
+        : 'Select a task to drill into the next level.';
+    header.append(title, message);
+    column.appendChild(header);
 
-    const selectedCount = dataset.tasks.filter((task) => task.level === level && selectedTaskIds.has(task.id)).length;
-    const totalCount = dataset.tasks.filter((task) => task.level === level).length;
+    let tasks = dataset.tasks.filter((task) => task.level === level);
 
-    levelDetails.innerHTML = `<summary>Level ${level} &middot; ${selectedCount}/${totalCount} selected</summary>`;
+    if (index > 0) {
+      const parentLevel = hierarchyLevels[index - 1];
+      const parentSelection = hierarchySelections.get(parentLevel);
+      if (!parentSelection) {
+        canRender = false;
+        return;
+      }
+      tasks = tasks.filter((task) => task.predecessors.includes(parentSelection));
+      if (tasks.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state soft';
+        empty.textContent = 'No downstream tasks for this milestone.';
+        column.appendChild(empty);
+        fragments.push(column);
+        canRender = false;
+        return;
+      }
+    }
 
-    scopeEntries.forEach(([scope, tasks]) => {
-      const scopeDetails = document.createElement('details');
-      scopeDetails.className = 'scope-block';
-      scopeDetails.open = tasks.some((task) => selectedTaskIds.has(task.id));
-      const selectedInScope = tasks.filter((task) => selectedTaskIds.has(task.id)).length;
-      scopeDetails.innerHTML = `<summary class="scope-header">${scope} <span class="info">${selectedInScope}/${tasks.length}</span></summary>`;
+    if (tasks.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state soft';
+      empty.textContent = 'No tasks available for this level.';
+      column.appendChild(empty);
+      fragments.push(column);
+      canRender = false;
+      return;
+    }
 
-      const list = document.createElement('div');
-      list.className = 'task-list';
+    const list = document.createElement('div');
+    list.className = 'hierarchy-task-list';
 
-      tasks
-        .slice()
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .forEach((task) => {
-          const item = document.createElement('div');
-          item.className = 'task-item';
+    tasks
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .forEach((task) => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'hierarchy-card';
+        if (hierarchySelections.get(level) === task.id) {
+          card.classList.add('selected');
+        }
+        card.innerHTML = `
+          <span class="title">${task.name}</span>
+          <span class="meta">#${task.id} · ${task.team || 'Unassigned'}</span>
+        `;
+        card.addEventListener('click', () => handleHierarchySelection(level, task));
+        list.appendChild(card);
+      });
 
-          const label = document.createElement('label');
-          const checkbox = document.createElement('input');
-          checkbox.type = 'checkbox';
-          checkbox.checked = selectedTaskIds.has(task.id);
-          checkbox.addEventListener('change', () => {
-            if (checkbox.checked) {
-              selectedTaskIds.add(task.id);
-            } else {
-              selectedTaskIds.delete(task.id);
-              if (selectedTask?.id === task.id) {
-                selectedTask = null;
-                renderTaskDetails();
-              }
-            }
-            recalculateLevelState(task.level);
-            renderLevelControls();
-            renderHierarchy();
-            renderDependencies();
-            updateGraph();
-          });
+    column.appendChild(list);
+    fragments.push(column);
 
-          label.appendChild(checkbox);
-          label.appendChild(document.createTextNode(`${task.name}`));
-
-          const info = document.createElement('div');
-          info.className = 'info';
-          info.textContent = `#${task.id} · ${task.team || 'Unassigned'}`;
-
-          item.append(label, info);
-          list.appendChild(item);
-        });
-
-      scopeDetails.appendChild(list);
-      levelDetails.appendChild(scopeDetails);
-    });
-
-    fragments.push(levelDetails);
+    if (!hierarchySelections.has(level)) {
+      canRender = false;
+    }
   });
 
   dom.hierarchy.innerHTML = '';
   fragments.forEach((fragment) => dom.hierarchy.appendChild(fragment));
 }
 
-function recalculateLevelState(level) {
-  if (!dataset) return;
-  const tasks = dataset.tasks.filter((task) => task.level === level);
-  const selectedCount = tasks.filter((task) => selectedTaskIds.has(task.id)).length;
-  let state = 'none';
-  if (selectedCount === tasks.length) {
-    state = 'all';
-  } else if (selectedCount > 0) {
-    state = 'partial';
+function getHierarchyLevels() {
+  if (!dataset) return [];
+  const sorted = dataset.levels.slice().sort((a, b) => a - b);
+  const levelTwoIndex = sorted.indexOf(2);
+  if (levelTwoIndex >= 0) {
+    return sorted.slice(levelTwoIndex);
   }
-  levelState.set(level, state);
+  return sorted;
+}
+
+function handleHierarchySelection(level, task) {
+  if (!dataset) return;
+
+  const currentlySelected = hierarchySelections.get(level);
+  if (currentlySelected === task.id) {
+    clearHierarchyFrom(level);
+    return;
+  }
+
+  hierarchySelections.set(level, task.id);
+
+  const hierarchyLevels = getHierarchyLevels();
+  const levelIndex = hierarchyLevels.indexOf(level);
+  hierarchyLevels.slice(levelIndex + 1).forEach((lvl) => hierarchySelections.delete(lvl));
+
+  rebuildSelectedTaskIds();
+  selectedTask = task;
+  renderLevelControls();
+  renderHierarchy();
+  renderDependencies();
+  updateGraph();
+  renderTaskDetails();
+}
+
+function clearHierarchyFrom(level) {
+  if (!dataset) return;
+  const hierarchyLevels = getHierarchyLevels();
+  const levelIndex = hierarchyLevels.indexOf(level);
+  if (levelIndex === -1) return;
+
+  hierarchyLevels.slice(levelIndex).forEach((lvl) => hierarchySelections.delete(lvl));
+  rebuildSelectedTaskIds();
+
+  if (selectedTask && !selectedTaskIds.has(selectedTask.id)) {
+    selectedTask = null;
+  }
+
+  renderLevelControls();
+  renderHierarchy();
+  renderDependencies();
+  updateGraph();
+  renderTaskDetails();
+}
+
+function rebuildSelectedTaskIds() {
+  selectedTaskIds = new Set(hierarchySelections.values());
 }
 
 function updateGraph() {
@@ -367,7 +400,7 @@ function updateGraph() {
       nodes.set(taskId, {
         data: {
           id: taskId,
-          label: `${task.name} ( ${taskId} )`,
+          label: formatNodeLabel(task.name, taskId),
           color,
           level: task.level,
           scope: task.scope,
@@ -378,7 +411,7 @@ function updateGraph() {
       nodes.set(taskId, {
         data: {
           id: taskId,
-          label: `External ${taskId}`,
+          label: formatNodeLabel(`External ${taskId}`, taskId),
           color: '#94a3b8',
           level: 0,
           scope: 'External',
@@ -394,7 +427,7 @@ function updateGraph() {
       nodes.set(dep.source, {
         data: {
           id: dep.source,
-          label: `External ${dep.source}`,
+          label: formatNodeLabel(`External ${dep.source}`, dep.source),
           color: '#94a3b8',
           level: dep.sourceLevel || 0,
           scope: 'External',
@@ -406,7 +439,7 @@ function updateGraph() {
       nodes.set(dep.target, {
         data: {
           id: dep.target,
-          label: `External ${dep.target}`,
+          label: formatNodeLabel(`External ${dep.target}`, dep.target),
           color: '#94a3b8',
           level: dep.targetLevel || 0,
           scope: 'External',
@@ -436,15 +469,25 @@ function updateGraph() {
           selector: 'node',
           style: {
             'background-color': 'data(color)',
+            'background-opacity': 0.92,
             'label': 'data(label)',
-            'color': '#fff',
-            'font-size': '10px',
+            'color': '#0f172a',
+            'font-size': '12px',
+            'font-weight': 600,
             'text-wrap': 'wrap',
-            'text-max-width': 120,
+            'text-max-width': 160,
             'text-valign': 'center',
             'text-halign': 'center',
-            'border-width': 2,
-            'border-color': 'rgba(255,255,255,0.65)'
+            'shape': 'round-rectangle',
+            'padding': '12px',
+            'border-width': 3,
+            'border-color': 'rgba(15,23,42,0.2)',
+            'shadow-blur': 12,
+            'shadow-color': 'rgba(15,23,42,0.25)',
+            'shadow-offset-x': 0,
+            'shadow-offset-y': 4,
+            'text-outline-width': 2,
+            'text-outline-color': 'rgba(255,255,255,0.85)'
           }
         },
         {
@@ -452,31 +495,34 @@ function updateGraph() {
           style: {
             'border-style': 'dashed',
             'opacity': 0.65,
-            'background-opacity': 0.25,
-            'color': '#cbd5f5'
+            'background-opacity': 0.4,
+            'color': '#1f2937'
           }
         },
         {
           selector: 'node:selected',
           style: {
             'border-width': 4,
-            'border-color': '#facc15'
+            'border-color': '#facc15',
+            'shadow-color': 'rgba(250, 204, 21, 0.45)',
+            'shadow-blur': 18
           }
         },
         {
           selector: 'edge',
           style: {
-            'width': 2,
-            'line-color': '#cbd5f5',
-            'target-arrow-color': '#cbd5f5',
+            'width': 3,
+            'line-color': 'rgba(148, 163, 184, 0.6)',
+            'target-arrow-color': 'rgba(71, 85, 105, 0.9)',
             'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
+            'curve-style': 'unbundled-bezier',
             'label': 'data(type)',
-            'font-size': '8px',
-            'color': '#e2e8f0',
-            'text-background-color': 'rgba(15,23,42,0.75)',
+            'font-size': '9px',
+            'color': '#cbd5f5',
+            'text-background-color': 'rgba(15,23,42,0.85)',
             'text-background-opacity': 1,
-            'text-background-padding': 2
+            'text-background-padding': 3,
+            'text-background-shape': 'roundrectangle'
           }
         },
         {
@@ -491,7 +537,7 @@ function updateGraph() {
           style: {
             'line-style': 'dotted',
             'source-arrow-shape': 'circle',
-            'source-arrow-color': '#cbd5f5',
+            'source-arrow-color': 'rgba(71,85,105,0.9)',
             'arrow-scale': 1.2
           }
         },
@@ -500,7 +546,7 @@ function updateGraph() {
           style: {
             'line-style': 'dashed',
             'source-arrow-shape': 'triangle',
-            'source-arrow-color': '#cbd5f5',
+            'source-arrow-color': 'rgba(71,85,105,0.9)',
             'target-arrow-shape': 'tee'
           }
         }
@@ -524,12 +570,42 @@ function updateGraph() {
     cyInstance.json({ elements });
   }
 
-  cyInstance.layout({ name: 'cose', animate: false, padding: 40 }).run();
+  cyInstance.layout({ name: 'cose', animate: false, padding: 60, nodeRepulsion: 9000 }).run();
 }
 
 function levelColor(level, idx) {
   const paletteIndex = typeof idx === 'number' ? idx % levelPalette.length : (level - 1) % levelPalette.length;
   return levelPalette[paletteIndex];
+}
+
+function formatNodeLabel(name, id) {
+  const wrapped = wrapText(name);
+  return `${wrapped}\n#${id}`;
+}
+
+function wrapText(text, maxLineLength = 18) {
+  if (!text) return '';
+  const words = String(text).split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '';
+
+  const lines = [];
+  let currentLine = '';
+
+  words.forEach((word) => {
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    if (candidate.length > maxLineLength && currentLine) {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = candidate;
+    }
+  });
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  return lines.join('\n');
 }
 
 function renderTaskDetails() {
