@@ -11,6 +11,7 @@ const levelPalette = [
 let dataset = null;
 let selectedTaskIds = new Set();
 let hierarchySelections = new Map();
+let graphSelections = new Set();
 let cyInstance = null;
 let includeNeighbors = true;
 let selectedTask = null;
@@ -40,6 +41,7 @@ dom.resetSelection.addEventListener('click', () => {
     cyInstance.elements().unselect();
   }
   hierarchySelections.clear();
+  graphSelections.clear();
   rebuildSelectedTaskIds();
   selectedTask = null;
   renderLevelControls();
@@ -79,6 +81,7 @@ function prepareDataset(records, label) {
 
   selectedTaskIds = new Set();
   hierarchySelections = new Map();
+  graphSelections = new Set();
   selectedTask = null;
 
   dataset = {
@@ -201,29 +204,60 @@ function renderLevelControls() {
   }
 
   const entries = Array.from(hierarchySelections.entries()).sort((a, b) => a[0] - b[0]);
+  const networkEntries = Array.from(graphSelections.values());
 
-  if (entries.length === 0) {
-    dom.levelControls.innerHTML = '<p class="empty-state">Select a starting task to explore downstream milestones.</p>';
+  if (entries.length === 0 && networkEntries.length === 0) {
+    dom.levelControls.innerHTML = '<p class="empty-state">Select a Level 2 milestone to begin, then expand follow-on work from the network.</p>';
     return;
   }
 
-  const wrapper = document.createElement('div');
-  wrapper.className = 'selection-path';
+  const fragment = document.createDocumentFragment();
 
-  entries.forEach(([level, taskId]) => {
-    const task = dataset.tasksById.get(taskId);
-    if (!task) return;
+  if (entries.length > 0) {
+    const hierarchyWrapper = document.createElement('div');
+    hierarchyWrapper.className = 'selection-path';
 
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'path-chip';
-    chip.innerHTML = `<span>L${level}</span><strong>${task.name}</strong>`;
-    chip.addEventListener('click', () => clearHierarchyFrom(level));
-    wrapper.appendChild(chip);
-  });
+    entries.forEach(([level, taskId]) => {
+      const task = dataset.tasksById.get(taskId);
+      if (!task) return;
+
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'path-chip';
+      chip.innerHTML = `<span>L${level}</span><strong>${task.name}</strong>`;
+      chip.addEventListener('click', () => clearHierarchyFrom(level));
+      hierarchyWrapper.appendChild(chip);
+    });
+
+    fragment.appendChild(hierarchyWrapper);
+  }
+
+  if (networkEntries.length > 0) {
+    const networkWrapper = document.createElement('div');
+    networkWrapper.className = 'selection-path';
+
+    networkEntries
+      .map((taskId) => ({ id: taskId, task: dataset.tasksById.get(taskId) }))
+      .sort((a, b) => {
+        const aName = a.task?.name || a.id;
+        const bName = b.task?.name || b.id;
+        return aName.localeCompare(bName);
+      })
+      .forEach(({ id, task }) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'path-chip';
+        const label = task ? task.name : `External ${id}`;
+        chip.innerHTML = `<span>Graph</span><strong>${label}</strong>`;
+        chip.addEventListener('click', () => toggleGraphSelection(id));
+        networkWrapper.appendChild(chip);
+      });
+
+    fragment.appendChild(networkWrapper);
+  }
 
   dom.levelControls.innerHTML = '';
-  dom.levelControls.appendChild(wrapper);
+  dom.levelControls.appendChild(fragment);
 }
 
 function renderHierarchy() {
@@ -246,7 +280,7 @@ function renderHierarchy() {
     message.textContent =
       index === 0
         ? `Choose a Level ${level} task to begin exploring.`
-        : 'Select a task to drill into the next level. Cross-level links appear when available.';
+        : 'Select a task to spotlight it in the network. Continue deeper by choosing nodes directly in the visualization.';
     header.append(title, message);
     column.appendChild(header);
 
@@ -374,6 +408,9 @@ function createTaskCard(task, level, options = {}) {
   if (hierarchySelections.get(level) === task.id) {
     card.classList.add('selected');
   }
+  if (graphSelections.has(task.id)) {
+    card.classList.add('network-selected');
+  }
   if (options?.relationship) {
     card.classList.add('related');
   }
@@ -395,6 +432,13 @@ function createTaskCard(task, level, options = {}) {
     card.appendChild(badge);
   }
 
+  if (graphSelections.has(task.id) && hierarchySelections.get(level) !== task.id) {
+    const focusBadge = document.createElement('span');
+    focusBadge.className = 'relationship-badge network';
+    focusBadge.textContent = 'Graph focus';
+    card.appendChild(focusBadge);
+  }
+
   card.addEventListener('click', () => handleHierarchySelection(level, task));
 
   return card;
@@ -404,10 +448,8 @@ function getHierarchyLevels() {
   if (!dataset) return [];
   const sorted = dataset.levels.slice().sort((a, b) => a - b);
   const levelTwoIndex = sorted.indexOf(2);
-  if (levelTwoIndex >= 0) {
-    return sorted.slice(levelTwoIndex);
-  }
-  return sorted;
+  const relevant = levelTwoIndex >= 0 ? sorted.slice(levelTwoIndex) : sorted;
+  return relevant.slice(0, 2);
 }
 
 function handleHierarchySelection(level, task) {
@@ -417,6 +459,10 @@ function handleHierarchySelection(level, task) {
   if (currentlySelected === task.id) {
     clearHierarchyFrom(level);
     return;
+  }
+
+  if (graphSelections.size > 0) {
+    graphSelections.clear();
   }
 
   hierarchySelections.set(level, task.id);
@@ -441,6 +487,7 @@ function clearHierarchyFrom(level) {
   if (levelIndex === -1) return;
 
   hierarchyLevels.slice(levelIndex).forEach((lvl) => hierarchySelections.delete(lvl));
+  graphSelections.clear();
   rebuildSelectedTaskIds();
 
   if (selectedTask && !selectedTaskIds.has(selectedTask.id)) {
@@ -455,7 +502,42 @@ function clearHierarchyFrom(level) {
 }
 
 function rebuildSelectedTaskIds() {
-  selectedTaskIds = new Set(hierarchySelections.values());
+  selectedTaskIds = new Set([...hierarchySelections.values(), ...graphSelections.values()]);
+}
+
+function toggleGraphSelection(taskId) {
+  if (isInHierarchy(taskId)) {
+    renderLevelControls();
+    renderHierarchy();
+    renderDependencies();
+    updateGraph();
+    renderTaskDetails();
+    return;
+  }
+
+  if (graphSelections.has(taskId)) {
+    graphSelections.delete(taskId);
+  } else {
+    graphSelections.add(taskId);
+  }
+  rebuildSelectedTaskIds();
+
+  if (selectedTask && selectedTask.id === taskId && !selectedTaskIds.has(taskId)) {
+    selectedTask = null;
+  }
+
+  renderLevelControls();
+  renderHierarchy();
+  renderDependencies();
+  updateGraph();
+  renderTaskDetails();
+}
+
+function isInHierarchy(taskId) {
+  for (const value of hierarchySelections.values()) {
+    if (value === taskId) return true;
+  }
+  return false;
 }
 
 function updateGraph() {
@@ -647,9 +729,10 @@ function updateGraph() {
 
     cyInstance.on('tap', 'node', (evt) => {
       const node = evt.target;
-      const task = dataset.tasksById.get(node.id());
-      selectedTask = task || { id: node.id(), placeholder: true };
-      renderTaskDetails();
+      const nodeId = node.id();
+      const task = dataset.tasksById.get(nodeId);
+      selectedTask = task || { id: nodeId, placeholder: true };
+      toggleGraphSelection(nodeId);
     });
 
     cyInstance.on('tap', (evt) => {
@@ -751,7 +834,7 @@ function renderDependencies() {
   }
 
   const rows = dataset.dependencies
-    .filter((dep) => selectedTaskIds.has(dep.target))
+    .filter((dep) => selectedTaskIds.has(dep.target) || selectedTaskIds.has(dep.source))
     .map((dep) => {
       const predecessor = dataset.tasksById.get(dep.source);
       const successor = dataset.tasksById.get(dep.target);
@@ -761,7 +844,9 @@ function renderDependencies() {
         targetId: dep.target,
         targetName: successor?.name || 'External task',
         type: dep.type,
-        critical: successor?.critical || predecessor?.critical || false
+        critical: successor?.critical || predecessor?.critical || false,
+        sourceSelected: selectedTaskIds.has(dep.source),
+        targetSelected: selectedTaskIds.has(dep.target)
       };
     });
 
@@ -783,10 +868,14 @@ function renderDependencies() {
         ${rows
           .map(
             (row) => `
-            <tr>
-              <td><strong>${row.sourceId}</strong> · ${row.sourceName}</td>
+            <tr class="${row.sourceSelected || row.targetSelected ? 'focused-row' : ''}">
+              <td><strong>${row.sourceId}</strong> · ${row.sourceName}${
+                row.sourceSelected ? ' <span class="dep-badge">In focus</span>' : ''
+              }</td>
               <td>${row.type}</td>
-              <td><strong>${row.targetId}</strong> · ${row.targetName}</td>
+              <td><strong>${row.targetId}</strong> · ${row.targetName}${
+                row.targetSelected ? ' <span class="dep-badge">In focus</span>' : ''
+              }</td>
             </tr>
           `
           )

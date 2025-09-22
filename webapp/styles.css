@@ -294,6 +294,15 @@ button:active,
   background: linear-gradient(135deg, rgba(219, 234, 254, 0.7), rgba(191, 219, 254, 0.8));
 }
 
+.hierarchy-card.network-selected {
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  box-shadow: 0 16px 32px rgba(37, 99, 235, 0.18);
+}
+
+.hierarchy-card.selected.network-selected {
+  outline-width: 3px;
+}
+
 .relationship-badge {
   display: inline-flex;
   align-items: center;
@@ -308,6 +317,29 @@ button:active,
   background: rgba(37, 99, 235, 0.18);
   color: var(--accent);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.relationship-badge.network {
+  background: rgba(15, 23, 42, 0.1);
+  color: rgba(15, 23, 42, 0.75);
+}
+
+.dep-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.4rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(22, 163, 74, 0.18);
+  color: #166534;
+}
+
+.dependencies table tbody tr.focused-row {
+  background: rgba(219, 234, 254, 0.6);
 }
 
 .empty-state {
