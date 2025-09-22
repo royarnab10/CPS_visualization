@@ -23,6 +23,10 @@ const dom = {
   levelControls: document.getElementById('level-controls'),
   taskDetails: document.getElementById('task-details'),
   dependencyTable: document.getElementById('dependency-table'),
+  dependencyPanel: document.getElementById('dependency-panel'),
+  dependencySummaryLabel: document.getElementById('dependency-summary-label'),
+  dependencySummaryCount: document.getElementById('dependency-summary-count'),
+  dependencyFocus: document.getElementById('dependency-focus'),
   fitGraph: document.getElementById('fit-graph'),
   resetSelection: document.getElementById('reset-selection'),
   legend: document.getElementById('legend'),
@@ -49,6 +53,9 @@ dom.resetSelection.addEventListener('click', () => {
   renderDependencies();
   updateGraph();
   renderTaskDetails();
+  if (dom.dependencyPanel) {
+    dom.dependencyPanel.open = false;
+  }
 });
 
 async function handleFileInput(event) {
@@ -91,6 +98,10 @@ function prepareDataset(records, label) {
     dependencies,
     levels
   };
+
+  if (dom.dependencyPanel) {
+    dom.dependencyPanel.open = false;
+  }
 
   if (dom.showFullGraph) {
     dom.showFullGraph.checked = false;
@@ -552,13 +563,14 @@ function updateGraph() {
 
   const nodes = new Map();
   const edges = [];
-  const focusIds = new Set(selectedTaskIds);
+  const hasExplicitFocus = Boolean(selectedTask);
+  const focusIds = hasExplicitFocus ? new Set([selectedTask.id]) : new Set(selectedTaskIds);
   const visible = new Set();
   const highlightNodes = new Set(focusIds);
   const highlightEdges = new Set();
   const hasFocus = focusIds.size > 0;
 
-  if (showFullGraph) {
+  if (showFullGraph && !hasFocus) {
     dataset.tasks.forEach((task) => visible.add(task.id));
     dataset.dependencies.forEach((dep) => {
       visible.add(dep.source);
@@ -634,11 +646,13 @@ function updateGraph() {
     }
 
     const edgeId = `${dep.source}->${dep.target}`;
+    const isHighlighted = highlightEdges.has(edgeId);
 
-    if (!showFullGraph && !hasFocus) {
+    if (hasFocus && !isHighlighted) {
       return;
     }
-    if (!showFullGraph && hasFocus && !highlightEdges.has(edgeId)) {
+
+    if (!showFullGraph && !hasFocus) {
       return;
     }
 
@@ -651,7 +665,7 @@ function updateGraph() {
         source: dep.source,
         target: dep.target,
         type: dep.type,
-        isDimmed: showFullGraph && hasFocus && !highlightEdges.has(edgeId)
+        isDimmed: showFullGraph && hasFocus && !isHighlighted
       }
     });
   });
@@ -874,34 +888,110 @@ function formatList(items) {
 }
 
 function renderDependencies() {
+  if (!dom.dependencyTable) return;
+
   if (!dataset) {
     dom.dependencyTable.innerHTML = '';
+    if (dom.dependencyFocus) {
+      dom.dependencyFocus.innerHTML = '';
+    }
+    if (dom.dependencySummaryLabel) {
+      dom.dependencySummaryLabel.textContent = 'Dependencies';
+    }
+    if (dom.dependencySummaryCount) {
+      dom.dependencySummaryCount.textContent = '';
+    }
+    if (dom.dependencyPanel) {
+      dom.dependencyPanel.open = false;
+    }
     return;
   }
 
+  const focusId = selectedTask?.id ?? null;
+  const hasExplicitFocus = Boolean(selectedTask);
+
+  if (dom.dependencySummaryLabel) {
+    if (hasExplicitFocus) {
+      const labelName = selectedTask.placeholder
+        ? `External ${selectedTask.id}`
+        : `${selectedTask.name} (#${selectedTask.id})`;
+      dom.dependencySummaryLabel.textContent = `Dependencies for ${labelName}`;
+    } else {
+      dom.dependencySummaryLabel.textContent = 'Dependencies';
+    }
+  }
+
+  if (dom.dependencyFocus) {
+    if (!selectedTask) {
+      dom.dependencyFocus.innerHTML =
+        '<p class="empty-state soft">Select a task in the hierarchy or network to preview its dependency chain.</p>';
+    } else if (selectedTask.placeholder) {
+      dom.dependencyFocus.innerHTML = `
+        <div class="dependency-focus-card">
+          <div class="dependency-focus-header">
+            <span class="dependency-focus-title">External dependency</span>
+            <span class="dependency-focus-id">#${selectedTask.id}</span>
+          </div>
+          <p class="dependency-focus-note">This task appears in the dependency chain but is not part of the uploaded schedule.</p>
+        </div>
+      `;
+    } else {
+      const badges = [];
+      if (selectedTask.critical) {
+        badges.push('<span class="status-pill critical">Critical</span>');
+      }
+      if (selectedTask.learningPlan) {
+        badges.push('<span class="status-pill learning">Learning plan</span>');
+      }
+      dom.dependencyFocus.innerHTML = `
+        <div class="dependency-focus-card">
+          <div class="dependency-focus-header">
+            <span class="dependency-focus-title">${selectedTask.name}</span>
+            <span class="dependency-focus-id">#${selectedTask.id}</span>
+          </div>
+          <div class="dependency-focus-meta">${selectedTask.team || 'Unassigned'} · Level ${selectedTask.levelLabel}</div>
+          <div class="dependency-focus-meta">${selectedTask.scope}</div>
+          ${badges.length ? `<div class="dependency-focus-badges">${badges.join(' ')}</div>` : ''}
+        </div>
+      `;
+    }
+  }
+
   const rows = dataset.dependencies
-    .filter((dep) => selectedTaskIds.has(dep.target) || selectedTaskIds.has(dep.source))
+    .filter((dep) => {
+      if (focusId) {
+        return dep.source === focusId || dep.target === focusId;
+      }
+      return selectedTaskIds.has(dep.target) || selectedTaskIds.has(dep.source);
+    })
     .map((dep) => {
       const predecessor = dataset.tasksById.get(dep.source);
       const successor = dataset.tasksById.get(dep.target);
+      const sourceFocused = focusId ? dep.source === focusId : selectedTaskIds.has(dep.source);
+      const targetFocused = focusId ? dep.target === focusId : selectedTaskIds.has(dep.target);
       return {
         sourceId: dep.source,
         sourceName: predecessor?.name || 'External task',
         targetId: dep.target,
         targetName: successor?.name || 'External task',
         type: dep.type,
-        critical: successor?.critical || predecessor?.critical || false,
-        sourceSelected: selectedTaskIds.has(dep.source),
-        targetSelected: selectedTaskIds.has(dep.target)
+        sourceFocused,
+        targetFocused
       };
     });
 
+  if (dom.dependencySummaryCount) {
+    dom.dependencySummaryCount.textContent = rows.length
+      ? `${rows.length} link${rows.length === 1 ? '' : 's'}`
+      : 'No links';
+  }
+
   if (rows.length === 0) {
-    dom.dependencyTable.innerHTML = '<p>No dependencies to display for the current selection.</p>';
+    dom.dependencyTable.innerHTML = '<p class="empty-state soft">No dependencies to display for the current focus.</p>';
     return;
   }
 
-  const header = `
+  const table = `
     <table>
       <thead>
         <tr>
@@ -914,13 +1004,13 @@ function renderDependencies() {
         ${rows
           .map(
             (row) => `
-            <tr class="${row.sourceSelected || row.targetSelected ? 'focused-row' : ''}">
+            <tr class="${row.sourceFocused || row.targetFocused ? 'focused-row' : ''}">
               <td><strong>${row.sourceId}</strong> · ${row.sourceName}${
-                row.sourceSelected ? ' <span class="dep-badge">In focus</span>' : ''
+                row.sourceFocused ? ' <span class="dep-badge">In focus</span>' : ''
               }</td>
               <td>${row.type}</td>
               <td><strong>${row.targetId}</strong> · ${row.targetName}${
-                row.targetSelected ? ' <span class="dep-badge">In focus</span>' : ''
+                row.targetFocused ? ' <span class="dep-badge">In focus</span>' : ''
               }</td>
             </tr>
           `
@@ -930,7 +1020,7 @@ function renderDependencies() {
     </table>
   `;
 
-  dom.dependencyTable.innerHTML = header;
+  dom.dependencyTable.innerHTML = table;
 }
 
 window.addEventListener('resize', () => {

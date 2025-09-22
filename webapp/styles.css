@@ -446,6 +446,116 @@ button:active,
   box-shadow: 0 20px 45px rgba(15, 23, 42, 0.12);
 }
 
+.dependency-focus {
+  min-height: 72px;
+}
+
+.dependency-focus-card {
+  border-radius: 0.95rem;
+  background: white;
+  padding: 0.85rem 1rem;
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.14);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.dependency-focus-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65rem;
+}
+
+.dependency-focus-title {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.dependency-focus-id {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(15, 23, 42, 0.55);
+}
+
+.dependency-focus-meta {
+  font-size: 0.82rem;
+  color: rgba(15, 23, 42, 0.6);
+}
+
+.dependency-focus-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.2rem;
+}
+
+.dependency-focus-note {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(15, 23, 42, 0.65);
+}
+
+.dependency-accordion {
+  margin-top: 1.1rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 0.9rem;
+  padding: 0.35rem 0.9rem;
+  background: rgba(241, 245, 249, 0.7);
+}
+
+.dependency-accordion[open] {
+  background: rgba(191, 219, 254, 0.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.dependency-summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: rgba(15, 23, 42, 0.85);
+  padding: 0.4rem 0;
+}
+
+.dependency-summary::-webkit-details-marker {
+  display: none;
+}
+
+.dependency-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 0.6rem;
+}
+
+.dependency-summary::after {
+  content: '';
+  width: 0.55rem;
+  height: 0.55rem;
+  border-right: 2px solid rgba(15, 23, 42, 0.6);
+  border-bottom: 2px solid rgba(15, 23, 42, 0.6);
+  transform: rotate(45deg);
+  transition: transform 0.2s ease;
+  margin-left: 0.4rem;
+}
+
+.dependency-accordion[open] .dependency-summary::after {
+  transform: rotate(-135deg);
+}
+
+.dependency-summary-count {
+  margin-left: auto;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: rgba(15, 23, 42, 0.6);
+}
+
+.dependency-body {
+  margin-top: 0.75rem;
+}
+
 .dependencies table {
   width: 100%;
   border-collapse: collapse;

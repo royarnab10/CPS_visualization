@@ -65,7 +65,18 @@
             <span>Show full graph</span>
           </label>
         </div>
-        <div class="dependencies" id="dependency-table"></div>
+        <div class="dependencies">
+          <div id="dependency-focus" class="dependency-focus"></div>
+          <details id="dependency-panel" class="dependency-accordion">
+            <summary class="dependency-summary">
+              <span id="dependency-summary-label">Dependencies</span>
+              <span id="dependency-summary-count" class="dependency-summary-count"></span>
+            </summary>
+            <div class="dependency-body">
+              <div id="dependency-table"></div>
+            </div>
+          </details>
+        </div>
       </section>
     </main>
 
