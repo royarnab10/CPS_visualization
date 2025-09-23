@@ -534,6 +534,15 @@ button:active,
   gap: 1rem;
 }
 
+.task-details-region {
+  grid-column: 2;
+  display: flex;
+}
+
+.task-details-region .task-panel {
+  flex: 1 1 auto;
+}
+
 .task-panel {
   align-self: stretch;
   padding: 1.5rem clamp(1.25rem, 2vw + 1rem, 1.75rem);
@@ -748,6 +757,10 @@ button:active,
 @media (max-width: 1100px) {
   .layout {
     grid-template-columns: 1fr;
+  }
+
+  .task-details-region {
+    grid-column: 1 / -1;
   }
 
   .graph {
