@@ -492,6 +492,7 @@ button:active,
   padding: 0.55rem 0.75rem;
   font-size: 0.85rem;
   background: rgba(255, 255, 255, 0.9);
+  color: var(--text);
 }
 
 .task-field input:focus {
@@ -531,6 +532,16 @@ button:active,
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+.task-panel {
+  align-self: stretch;
+  padding: 1.5rem clamp(1.25rem, 2vw + 1rem, 1.75rem);
+}
+
+.task-panel h2 {
+  margin-top: 0;
+  margin-bottom: 0.85rem;
 }
 
 .legend {
