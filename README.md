@@ -24,19 +24,13 @@ No runtime installation is required beyond a modern web browser. To keep setup l
 
 1. **Clone the repository** (or download the ZIP).
 2. **Open a terminal** in the project root.
-3. **Start a lightweight static server**:
+3. **Start the preprocessing server** (serves the web UI and cleans uploads):
 
-   ### macOS (built-in Python 3)
    ```bash
-   python3 -m http.server 8000 --directory webapp
+   python server.py --port 8000
    ```
 
-   ### Windows (PowerShell with Python installed)
-   ```powershell
-   py -3 -m http.server 8000 --directory webapp
-   ```
-
-   > 💡 If `py` is unavailable, try `python` instead. The command prints the URL you can open in the browser (`http://0.0.0.0:8000` or `http://localhost:8000`).
+   The server streams and cleans uploaded workbooks before handing them to the front-end. Large workbooks may take a few seconds to process while hierarchy-based dependencies are restored.
 
 4. **Open the app** in your preferred browser at `http://localhost:8000`.
 5. **Load data**:
@@ -78,7 +72,8 @@ The first sheet of the workbook is parsed. A header row is required. The followi
    - **Clear selection** empties the detail drawer.
    - **Auto-include context** adds the direct predecessors and successors of selected tasks so that dependencies are never orphaned.
 4. **Task detail drawer** – Click a node to surface its metadata, predecessor/successor IDs, and status badges (critical, learning plan).
-5. **Dependency table** – Lists every predecessor → successor relationship for the currently visible tasks, including dependency type.
+5. **Dependency cleaning** – When an Excel file is uploaded the app pauses briefly while the Python pipeline inspects indentation and fills in missing predecessor/successor links.
+6. **Dependency table** – Lists every predecessor → successor relationship for the currently visible tasks, including dependency type.
 
 Tip: For complex reviews, start with only L2 milestones selected, then progressively expand lower levels or specific scopes while discussing with stakeholders.
 

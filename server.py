@@ -1,0 +1,100 @@
+"""Minimal HTTP server for the CPS visualizer with preprocessing support."""
+from __future__ import annotations
+
+import argparse
+import json
+from functools import partial
+from http import HTTPStatus
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Tuple
+import cgi
+
+from cps_preprocessor import preprocess_excel
+
+WEBAPP_DIR = Path(__file__).resolve().parent / "webapp"
+
+
+class CPSRequestHandler(SimpleHTTPRequestHandler):
+    """Serve static assets and expose a preprocessing API."""
+
+    def __init__(self, *args, directory: str | None = None, **kwargs) -> None:
+        super().__init__(*args, directory=directory or str(WEBAPP_DIR), **kwargs)
+
+    def do_POST(self) -> None:  # noqa: N802 - part of the HTTP handler API
+        if self.path == "/api/preprocess":
+            self._handle_preprocess()
+        else:
+            self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
+
+    def _handle_preprocess(self) -> None:
+        content_type = self.headers.get("Content-Type", "")
+        ctype, pdict = cgi.parse_header(content_type)
+        if ctype != "multipart/form-data":
+            self.send_error(HTTPStatus.BAD_REQUEST, "Expected multipart/form-data upload")
+            return
+
+        boundary = pdict.get("boundary")
+        if not boundary:
+            self.send_error(HTTPStatus.BAD_REQUEST, "Missing multipart boundary")
+            return
+
+        pdict["boundary"] = boundary.encode()
+        pdict["CONTENT-LENGTH"] = int(self.headers.get("Content-Length", "0"))
+
+        form = cgi.FieldStorage(
+            fp=self.rfile,
+            headers=self.headers,
+            environ={
+                "REQUEST_METHOD": "POST",
+                "CONTENT_TYPE": content_type,
+            },
+            keep_blank_values=True,
+        )
+
+        file_item = form["file"] if "file" in form else None
+        if file_item is None or not getattr(file_item, "file", None):
+            self.send_error(HTTPStatus.BAD_REQUEST, "Upload must include a 'file' field")
+            return
+
+        file_bytes = file_item.file.read()
+        try:
+            records, metadata = preprocess_excel(file_bytes)
+        except ValueError as exc:
+            self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+
+        payload = json.dumps({"records": records, "metadata": metadata}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format: str, *args) -> None:
+        # Prefix log entries to make server output easier to follow.
+        super().log_message("[CPS] " + format, *args)
+
+
+def serve(address: Tuple[str, int]) -> None:
+    handler = partial(CPSRequestHandler, directory=str(WEBAPP_DIR))
+    with ThreadingHTTPServer(address, handler) as httpd:
+        host, port = httpd.server_address
+        print(f"Serving CPS visualizer on http://{host}:{port}")
+        print("Press Ctrl+C to stop.")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\nShutting down...")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Serve the CPS visualizer with preprocessing support")
+    parser.add_argument("--host", default="0.0.0.0", help="Host interface to bind (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8000, help="Port to listen on (default: 8000)")
+    args = parser.parse_args()
+    serve((args.host, args.port))
+
+
+if __name__ == "__main__":
+    main()
