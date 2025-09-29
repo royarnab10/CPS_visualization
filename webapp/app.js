@@ -15,10 +15,15 @@ let graphSelections = new Set();
 let cyInstance = null;
 let showFullGraph = false;
 let selectedTask = null;
+let isProcessingUpload = false;
+
+const BASE_DURATION_HEADERS = ['Base Duration', 'Duration', 'Duration (days)', 'Task Duration'];
+const CALCULATED_DURATION_HEADERS = ['Calculated Duration (days)', 'Calculated Duration'];
 
 const dom = {
   fileInput: document.getElementById('file-input'),
   loadSample: document.getElementById('load-sample'),
+  downloadDataset: document.getElementById('download-dataset'),
   processingNotice: document.getElementById('processing-notice'),
   hierarchy: document.getElementById('hierarchy'),
   levelControls: document.getElementById('level-controls'),
@@ -31,11 +36,23 @@ const dom = {
   fitGraph: document.getElementById('fit-graph'),
   resetSelection: document.getElementById('reset-selection'),
   legend: document.getElementById('legend'),
-  showFullGraph: document.getElementById('show-full-graph')
+  showFullGraph: document.getElementById('show-full-graph'),
+  durationSummary: document.getElementById('duration-summary'),
+  totalDurationDisplay: document.getElementById('total-duration-display'),
+  totalDurationDetail: document.getElementById('total-duration-detail'),
+  selectedDurationDisplay: document.getElementById('selected-duration-display'),
+  selectedDurationDetail: document.getElementById('selected-duration-detail'),
+  pathDurationDisplay: document.getElementById('path-duration-display'),
+  pathDurationDetail: document.getElementById('path-duration-detail')
 };
+
+renderDurationSummary();
 
 dom.fileInput.addEventListener('change', handleFileInput);
 dom.loadSample.addEventListener('click', loadSampleData);
+if (dom.downloadDataset) {
+  dom.downloadDataset.addEventListener('click', downloadCurrentWorkbook);
+}
 dom.showFullGraph.addEventListener('change', () => {
   showFullGraph = dom.showFullGraph.checked;
   updateGraph();
@@ -60,7 +77,13 @@ dom.resetSelection.addEventListener('click', () => {
 });
 
 function setProcessingState(message, active) {
-  if (!dom.processingNotice) return;
+  isProcessingUpload = active;
+  if (!dom.processingNotice) {
+    if (dom.fileInput) dom.fileInput.disabled = active;
+    if (dom.loadSample) dom.loadSample.disabled = active;
+    updateDownloadButton();
+    return;
+  }
   const displayMessage = message || 'Cleaning schedule dependencies…';
   if (active) {
     dom.processingNotice.textContent = displayMessage;
@@ -70,6 +93,7 @@ function setProcessingState(message, active) {
   }
   if (dom.fileInput) dom.fileInput.disabled = active;
   if (dom.loadSample) dom.loadSample.disabled = active;
+  updateDownloadButton();
 }
 
 async function preprocessWorkbook(file) {
@@ -128,6 +152,7 @@ function prepareDataset(records, label, options = {}) {
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   const dependencies = buildDependencies(tasks);
   const levels = Array.from(new Set(tasks.map((t) => t.level))).sort((a, b) => a - b);
+  const rawRows = Array.isArray(records) ? records.map((row) => ({ ...row })) : [];
 
   selectedTaskIds = new Set();
   hierarchySelections = new Map();
@@ -140,7 +165,9 @@ function prepareDataset(records, label, options = {}) {
     tasksById,
     dependencies,
     levels,
-    modified: Boolean(options.cleaned),
+    modified: false,
+    preprocessed: Boolean(options.cleaned),
+    rawRows,
     metadata: options.metadata || null
   };
 
@@ -159,6 +186,8 @@ function prepareDataset(records, label, options = {}) {
   renderDependencies();
   updateGraph();
   renderTaskDetails();
+  renderDurationSummary();
+  updateDownloadButton();
 }
 
 function normalizeRecord(record) {
@@ -180,6 +209,11 @@ function normalizeRecord(record) {
   const successorsRaw = mapped['Successors IDs'] || mapped['Successor IDs'] || mapped['Successors'] || '';
   const dependencyTypeRaw = mapped['Dependency Type'] || mapped['Dependency Types'] || '';
 
+  const baseDurationValue = readFirstAvailable(mapped, BASE_DURATION_HEADERS);
+  const calculatedDurationValue = readFirstAvailable(mapped, CALCULATED_DURATION_HEADERS);
+  const baseDuration = parseDurationValue(baseDurationValue);
+  const calculatedDuration = parseDurationValue(calculatedDurationValue);
+
   return {
     id: String(id),
     name,
@@ -193,6 +227,12 @@ function normalizeRecord(record) {
     predecessors: splitIds(predecessorsRaw),
     successors: splitIds(successorsRaw),
     dependencyTypes: splitIds(dependencyTypeRaw).map((type) => (type ? type.toUpperCase() : 'FS')),
+    baseDurationDisplay: baseDuration.display,
+    baseDurationDays: baseDuration.days,
+    hasBaseDuration: baseDuration.hasValue,
+    calculatedDurationDisplay: calculatedDuration.display,
+    calculatedDurationDays: calculatedDuration.days,
+    hasCalculatedDuration: calculatedDuration.hasValue,
     raw: mapped
   };
 }
@@ -217,6 +257,312 @@ function normalizeBoolean(value) {
   const normalized = String(value || '').toLowerCase();
   if (!normalized) return false;
   return ['true', 'yes', 'y', '1'].includes(normalized);
+}
+
+function readFirstAvailable(record, keys) {
+  for (const key of keys) {
+    if (!key) continue;
+    const value = record[key];
+    if (value === undefined || value === null) continue;
+    const text = typeof value === 'string' ? value.trim() : value;
+    if (typeof text === 'string' && text === '') continue;
+    return value;
+  }
+  return '';
+}
+
+function parseDurationValue(value) {
+  if (value === undefined || value === null) {
+    return { display: '', days: null, hasValue: false };
+  }
+  const text = String(value).trim();
+  if (!text) {
+    return { display: '', days: null, hasValue: false };
+  }
+  const cleaned = text.replace(/\?/g, '').trim();
+  if (!cleaned) {
+    return { display: '', days: null, hasValue: false };
+  }
+
+  const normalized = cleaned.replace(/\s+/g, '').toLowerCase();
+  let days = null;
+
+  if (/^-?\d+(?:\.\d+)?$/.test(normalized)) {
+    days = Number(normalized);
+  } else if (/^-?\d+(?:\.\d+)?d$/.test(normalized)) {
+    days = Number(normalized.slice(0, -1));
+  } else if (/^-?\d+(?:\.\d+)?w$/.test(normalized)) {
+    days = Number(normalized.slice(0, -1)) * 7;
+  } else {
+    const wordMatch = normalized.match(/^(-?\d+(?:\.\d+)?)(days?|weeks?)$/);
+    if (wordMatch) {
+      const valueNum = Number(wordMatch[1]);
+      if (!Number.isNaN(valueNum)) {
+        days = wordMatch[2].startsWith('week') ? valueNum * 7 : valueNum;
+      }
+    }
+  }
+
+  const parsedDays = typeof days === 'number' && !Number.isNaN(days) ? days : null;
+  let display = cleaned.replace(/\s+/g, '');
+  if (parsedDays !== null && !/[a-z]$/i.test(display)) {
+    display = formatDurationLabel(parsedDays);
+  }
+
+  return { display, days: parsedDays, hasValue: true };
+}
+
+function formatNumber(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '0';
+  return Number(value.toFixed(2)).toString();
+}
+
+function formatDurationLabel(days) {
+  if (typeof days !== 'number' || Number.isNaN(days)) return '';
+  return `${formatNumber(days)}d`;
+}
+
+function formatWeeksLabel(days) {
+  if (typeof days !== 'number' || Number.isNaN(days)) return '0 weeks';
+  return `${formatNumber(days / 7)} weeks`;
+}
+
+function durationsClose(a, b) {
+  if (typeof a !== 'number' || typeof b !== 'number') return false;
+  return Math.abs(a - b) <= 0.01;
+}
+
+function describeSingleDuration(days, display, hasValue) {
+  if (typeof days === 'number' && !Number.isNaN(days)) {
+    return {
+      display: display && display.trim() ? display : formatDurationLabel(days),
+      detail: `${formatNumber(days)} days · ${formatWeeksLabel(days)}`
+    };
+  }
+  if (hasValue && display && display.trim()) {
+    return {
+      display: display.trim(),
+      detail: `Recorded as ${display.trim()}`
+    };
+  }
+  return { display: '', detail: '' };
+}
+
+function buildDurationSummaryForTask(task, options = {}) {
+  const includeLabel = Boolean(options.includeLabel);
+  const label = includeLabel ? `${task.name} (#${task.id})` : '';
+
+  const hasCalculated = Boolean(
+    task.hasCalculatedDuration ||
+      (task.calculatedDurationDisplay && task.calculatedDurationDisplay.trim()) ||
+      typeof task.calculatedDurationDays === 'number'
+  );
+  const hasBase = Boolean(
+    task.hasBaseDuration ||
+      (task.baseDurationDisplay && task.baseDurationDisplay.trim()) ||
+      typeof task.baseDurationDays === 'number'
+  );
+
+  const calcInfo = describeSingleDuration(
+    task.calculatedDurationDays,
+    task.calculatedDurationDisplay,
+    hasCalculated
+  );
+  const baseInfo = describeSingleDuration(task.baseDurationDays, task.baseDurationDisplay, hasBase);
+
+  if (hasCalculated && calcInfo.display) {
+    const detailParts = [];
+    detailParts.push(includeLabel ? `Rolled-up for ${label}` : 'Rolled-up duration');
+    if (calcInfo.detail) {
+      detailParts.push(calcInfo.detail);
+    }
+    if (hasBase && baseInfo.display) {
+      if (
+        typeof task.calculatedDurationDays === 'number' &&
+        typeof task.baseDurationDays === 'number' &&
+        durationsClose(task.calculatedDurationDays, task.baseDurationDays)
+      ) {
+        detailParts.push('Matches base duration');
+      } else if (baseInfo.detail) {
+        detailParts.push(
+          includeLabel ? `Base for ${label} · ${baseInfo.detail}` : `Base duration · ${baseInfo.detail}`
+        );
+      } else {
+        detailParts.push(includeLabel ? `Base for ${label}` : 'Base duration');
+      }
+    }
+    return {
+      display: calcInfo.display,
+      detail: detailParts.join(' · ')
+    };
+  }
+
+  if (hasBase && baseInfo.display) {
+    const detailParts = [];
+    detailParts.push(includeLabel ? `Base for ${label}` : 'Base duration');
+    if (baseInfo.detail) {
+      detailParts.push(baseInfo.detail);
+    }
+    return {
+      display: baseInfo.display,
+      detail: detailParts.join(' · ')
+    };
+  }
+
+  return {
+    display: '—',
+    detail: includeLabel
+      ? `No duration data recorded for ${label}.`
+      : 'No duration data recorded for this task.'
+  };
+}
+
+function computeScheduleTotalDays() {
+  if (!dataset || !dataset.tasks || dataset.tasks.length === 0) {
+    return null;
+  }
+
+  let rootIds = dataset.tasks
+    .filter((task) => task.predecessors.length === 0)
+    .map((task) => task.id);
+
+  if (rootIds.length === 0) {
+    let minLevel = Infinity;
+    dataset.tasks.forEach((task) => {
+      if (typeof task.level === 'number') {
+        minLevel = Math.min(minLevel, task.level);
+      }
+    });
+    if (minLevel !== Infinity) {
+      rootIds = dataset.tasks.filter((task) => task.level === minLevel).map((task) => task.id);
+    }
+  }
+
+  if (rootIds.length === 0) {
+    return null;
+  }
+
+  let total = 0;
+  let hasValue = false;
+
+  rootIds.forEach((taskId) => {
+    const task = dataset.tasksById.get(taskId);
+    if (!task) return;
+    let value = null;
+    if (typeof task.calculatedDurationDays === 'number' && !Number.isNaN(task.calculatedDurationDays)) {
+      value = task.calculatedDurationDays;
+    } else if (typeof task.baseDurationDays === 'number' && !Number.isNaN(task.baseDurationDays)) {
+      value = task.baseDurationDays;
+    }
+    if (value !== null) {
+      total += value;
+      hasValue = true;
+    }
+  });
+
+  return hasValue ? total : null;
+}
+
+function describeSelectedTaskDuration() {
+  if (!dataset || !selectedTask || selectedTask.placeholder) {
+    return {
+      display: '—',
+      detail: 'Select a task to inspect its duration.'
+    };
+  }
+
+  const task = dataset.tasksById.get(selectedTask.id);
+  if (!task) {
+    return {
+      display: '—',
+      detail: 'The selected task is no longer part of this dataset.'
+    };
+  }
+
+  return buildDurationSummaryForTask(task);
+}
+
+function describeCurrentPathDuration() {
+  if (!dataset || hierarchySelections.size === 0) {
+    return {
+      display: '—',
+      detail: 'Choose a Level 2 milestone to review its rolled-up timing.'
+    };
+  }
+
+  const entries = Array.from(hierarchySelections.entries()).sort((a, b) => a[0] - b[0]);
+  const [, taskId] = entries[entries.length - 1];
+  const task = dataset.tasksById.get(taskId);
+
+  if (!task) {
+    return {
+      display: '—',
+      detail: 'The selected path is no longer available in this dataset.'
+    };
+  }
+
+  return buildDurationSummaryForTask(task, { includeLabel: true });
+}
+
+function renderDurationSummary() {
+  if (
+    !dom.totalDurationDisplay ||
+    !dom.totalDurationDetail ||
+    !dom.selectedDurationDisplay ||
+    !dom.selectedDurationDetail ||
+    !dom.pathDurationDisplay ||
+    !dom.pathDurationDetail
+  ) {
+    return;
+  }
+
+  if (!dataset) {
+    dom.totalDurationDisplay.textContent = '—';
+    dom.totalDurationDetail.textContent = 'Upload a schedule to calculate the overall timeline.';
+    dom.selectedDurationDisplay.textContent = '—';
+    dom.selectedDurationDetail.textContent = 'Select a task to inspect its duration.';
+    dom.pathDurationDisplay.textContent = '—';
+    dom.pathDurationDetail.textContent = 'Choose a Level 2 milestone to review its rolled-up timing.';
+    return;
+  }
+
+  const hasDurationData = dataset.tasks.some(
+    (task) =>
+      typeof task.calculatedDurationDays === 'number' ||
+      typeof task.baseDurationDays === 'number' ||
+      (task.calculatedDurationDisplay && task.calculatedDurationDisplay.trim()) ||
+      (task.baseDurationDisplay && task.baseDurationDisplay.trim())
+  );
+
+  let totalDays =
+    typeof dataset.metadata?.totalDurationDays === 'number'
+      ? dataset.metadata.totalDurationDays
+      : null;
+
+  if (totalDays === null || Number.isNaN(totalDays)) {
+    totalDays = computeScheduleTotalDays();
+  }
+
+  const totalDisplay =
+    (dataset.metadata?.totalDurationDisplay && dataset.metadata.totalDurationDisplay.trim()) ||
+    (totalDays !== null && !Number.isNaN(totalDays) ? formatDurationLabel(totalDays) : '—');
+
+  dom.totalDurationDisplay.textContent = totalDisplay || '—';
+  if (totalDays !== null && !Number.isNaN(totalDays)) {
+    dom.totalDurationDetail.textContent = `${formatNumber(totalDays)} days · ${formatWeeksLabel(totalDays)}`;
+  } else if (hasDurationData) {
+    dom.totalDurationDetail.textContent = 'Unable to compute a rolled-up total from the provided durations.';
+  } else {
+    dom.totalDurationDetail.textContent = 'No duration data found in this dataset.';
+  }
+
+  const selectedSummary = describeSelectedTaskDuration();
+  dom.selectedDurationDisplay.textContent = selectedSummary.display;
+  dom.selectedDurationDetail.textContent = selectedSummary.detail;
+
+  const pathSummary = describeCurrentPathDuration();
+  dom.pathDurationDisplay.textContent = pathSummary.display;
+  dom.pathDurationDetail.textContent = pathSummary.detail;
 }
 
 function buildDependencies(tasks) {
@@ -488,6 +834,45 @@ function createTaskCard(task, level, options = {}) {
   meta.textContent = `#${task.id} · ${task.team || 'Unassigned'}`;
 
   card.append(title, meta);
+
+  const rolledInfo = describeSingleDuration(
+    task.calculatedDurationDays,
+    task.calculatedDurationDisplay,
+    task.hasCalculatedDuration
+  );
+  const baseInfo = describeSingleDuration(
+    task.baseDurationDays,
+    task.baseDurationDisplay,
+    task.hasBaseDuration
+  );
+  const durationSource = rolledInfo.display ? { info: rolledInfo, type: 'rolled' } : baseInfo.display ? { info: baseInfo, type: 'base' } : null;
+
+  if (durationSource) {
+    const badge = document.createElement('span');
+    badge.className = 'duration';
+    badge.textContent = durationSource.info.display;
+    const tooltipParts = [];
+    if (durationSource.type === 'rolled') {
+      tooltipParts.push(rolledInfo.detail || 'Rolled-up duration');
+      if (baseInfo.display) {
+        if (
+          typeof task.calculatedDurationDays === 'number' &&
+          typeof task.baseDurationDays === 'number' &&
+          durationsClose(task.calculatedDurationDays, task.baseDurationDays)
+        ) {
+          tooltipParts.push('Matches base duration');
+        } else if (baseInfo.detail) {
+          tooltipParts.push(`Base ${baseInfo.detail}`);
+        } else {
+          tooltipParts.push(`Base ${baseInfo.display}`);
+        }
+      }
+    } else if (durationSource.type === 'base') {
+      tooltipParts.push(baseInfo.detail || 'Base duration');
+    }
+    badge.title = tooltipParts.filter(Boolean).join(' · ');
+    card.appendChild(badge);
+  }
 
   if (options?.relationship) {
     const badge = document.createElement('span');
@@ -893,10 +1278,12 @@ function wrapText(text, maxLineLength = 18) {
 }
 
 function renderTaskDetails() {
+  if (!dom.taskDetails) return;
   if (!selectedTask) {
     dom.taskDetails.classList.add('empty');
     dom.taskDetails.innerHTML =
       '<p>Select a task from the hierarchy or network to edit its fields, remove it, or manage its dependencies.</p>';
+    renderDurationSummary();
     return;
   }
 
@@ -907,6 +1294,7 @@ function renderTaskDetails() {
       <h3>External dependency</h3>
       <p>The task <strong>${selectedTask.id}</strong> exists in the dependency chain but is not present in the uploaded schedule.</p>
     `;
+    renderDurationSummary();
     return;
   }
 
@@ -916,6 +1304,7 @@ function renderTaskDetails() {
       <h3>Task unavailable</h3>
       <p>The selected task is no longer part of the working dataset.</p>
     `;
+    renderDurationSummary();
     return;
   }
 
@@ -924,12 +1313,29 @@ function renderTaskDetails() {
   const form = buildTaskEditForm(task);
   dom.taskDetails.innerHTML = '';
   dom.taskDetails.appendChild(form);
+  renderDurationSummary();
 }
 
 function buildTaskEditForm(task) {
   const form = document.createElement('form');
   form.className = 'task-edit-form';
   form.noValidate = true;
+
+  const rolledInfo = describeSingleDuration(
+    task.calculatedDurationDays,
+    task.calculatedDurationDisplay,
+    task.hasCalculatedDuration
+  );
+  const baseInfo = describeSingleDuration(
+    task.baseDurationDays,
+    task.baseDurationDisplay,
+    task.hasBaseDuration
+  );
+
+  const rolledDisplay = rolledInfo.display || '—';
+  const rolledDetail = rolledInfo.detail || 'No rolled-up duration available.';
+  const baseDisplay = baseInfo.display || '—';
+  const baseDetail = baseInfo.detail || 'No base duration recorded.';
 
   form.innerHTML = `
     <div class="task-form-header">
@@ -942,6 +1348,18 @@ function buildTaskEditForm(task) {
       <div class="task-form-actions">
         <button type="submit" class="save-button" data-role="save" disabled>Save changes</button>
         <button type="button" class="delete-button" data-role="delete">Delete task</button>
+      </div>
+    </div>
+    <div class="task-duration-overview">
+      <div class="duration-card">
+        <span class="duration-label">Rolled-up duration</span>
+        <strong>${escapeHtml(rolledDisplay)}</strong>
+        <small>${escapeHtml(rolledDetail)}</small>
+      </div>
+      <div class="duration-card">
+        <span class="duration-label">Base duration</span>
+        <strong>${escapeHtml(baseDisplay)}</strong>
+        <small>${escapeHtml(baseDetail)}</small>
       </div>
     </div>
     <div class="task-form-grid">
@@ -1413,6 +1831,8 @@ function describeTaskById(taskId) {
 function afterDatasetMutation(actionDescription) {
   if (!dataset) return;
   dataset.modified = true;
+  dataset.preprocessed = false;
+  dataset.rawRows = null;
   refreshDatasetIndexes();
   cleanupSelections();
   rebuildSelectedTaskIds();
@@ -1423,7 +1843,9 @@ function afterDatasetMutation(actionDescription) {
   renderDependencies();
   updateGraph();
   renderTaskDetails();
+  renderDurationSummary();
 
+  updateDownloadButton();
   promptForDownload(actionDescription);
 }
 
@@ -1452,6 +1874,29 @@ function cleanupSelections() {
   }
 }
 
+function updateDownloadButton() {
+  if (!dom.downloadDataset) return;
+  const hasRawRows = Boolean(dataset?.rawRows && dataset.rawRows.length);
+  const hasTasks = Boolean(dataset?.tasks && dataset.tasks.length);
+  const hasData = hasRawRows || hasTasks;
+  dom.downloadDataset.disabled = !hasData || isProcessingUpload;
+  if (!hasData) {
+    dom.downloadDataset.textContent = 'Download processed Excel';
+    return;
+  }
+  const showProcessedLabel = Boolean(!dataset?.modified && dataset?.preprocessed);
+  dom.downloadDataset.textContent = showProcessedLabel ? 'Download processed Excel' : 'Download Excel';
+}
+
+function downloadCurrentWorkbook() {
+  if (!dataset || (dom.downloadDataset && dom.downloadDataset.disabled)) return;
+  if (!dataset.modified && dataset.rawRows && dataset.rawRows.length) {
+    exportRowsToExcel(dataset.rawRows);
+    return;
+  }
+  exportDatasetToExcel();
+}
+
 function promptForDownload(actionDescription) {
   if (!dataset) return;
   const label = dataset.label || 'schedule';
@@ -1460,26 +1905,46 @@ function promptForDownload(actionDescription) {
       '\nSelect OK to download the latest Excel file now, or Cancel to continue editing.'
   );
   if (approval) {
-    exportDatasetToExcel();
+    downloadCurrentWorkbook();
   }
 }
 
 function exportDatasetToExcel() {
   if (!dataset) return;
-  const rows = dataset.tasks.map((task) => ({
-    'Task ID': task.id,
-    'Task Name': task.name,
-    'Task Level': task.levelLabel || `L${task.level}`,
-    'Responsible Sub-team': task.team || '',
-    'Responsible Function': task.function || '',
-    Scope: task.scope || '',
-    Learning_Plan: task.learningPlan ? 'Yes' : 'No',
-    Critical: task.critical ? 'Yes' : 'No',
-    'Predecessors IDs': task.predecessors.join(', '),
-    'Successors IDs': task.successors.join(', '),
-    'Dependency Types': task.dependencyTypes.join(', ')
-  }));
+  const rows = dataset.tasks.map((task) => {
+    const row = task.raw ? { ...task.raw } : {};
+    row['Task ID'] = task.id;
+    row['TaskId'] = task.id;
+    row['Task Name'] = task.name;
+    row['Name'] = task.name;
+    row['Task Level'] = task.levelLabel || `L${task.level}`;
+    row['Level'] = task.levelLabel || `L${task.level}`;
+    row['Responsible Sub-team'] = task.team || '';
+    row['Sub-team'] = task.team || '';
+    row['Responsible Function'] = task.function || '';
+    row['Function'] = task.function || '';
+    row.Scope = task.scope || '';
+    row.SCOPE = task.scope || row.SCOPE || '';
+    row.Learning_Plan = task.learningPlan ? 'Yes' : 'No';
+    row['Learning Plan'] = task.learningPlan ? 'Yes' : 'No';
+    row.Critical = task.critical ? 'Yes' : 'No';
+    row['Is Critical'] = task.critical ? 'Yes' : 'No';
+    row['Predecessors IDs'] = task.predecessors.join(', ');
+    row['Predecessor IDs'] = task.predecessors.join(', ');
+    row.Predecessors = task.predecessors.join(', ');
+    row['Successors IDs'] = task.successors.join(', ');
+    row['Successor IDs'] = task.successors.join(', ');
+    row.Successors = task.successors.join(', ');
+    row['Dependency Type'] = task.dependencyTypes.join(', ');
+    row['Dependency Types'] = task.dependencyTypes.join(', ');
+    return row;
+  });
 
+  exportRowsToExcel(rows);
+}
+
+function exportRowsToExcel(rows) {
+  if (!rows || rows.length === 0) return;
   const worksheet = XLSX.utils.json_to_sheet(rows);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Tasks');

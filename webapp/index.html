@@ -30,8 +30,35 @@
           <input id="file-input" type="file" accept=".xlsx,.xls" />
         </label>
         <button id="load-sample" type="button">Load sample data</button>
+        <button id="download-dataset" type="button" class="secondary-button" disabled>
+          Download processed Excel
+        </button>
       </div>
     </header>
+
+    <section id="duration-summary" class="duration-summary" aria-live="polite">
+      <article class="summary-card">
+        <h2>Total CPS duration</h2>
+        <p id="total-duration-display" class="summary-value">—</p>
+        <p id="total-duration-detail" class="summary-meta">
+          Upload a schedule to calculate the overall timeline.
+        </p>
+      </article>
+      <article class="summary-card">
+        <h2>Selected task</h2>
+        <p id="selected-duration-display" class="summary-value">—</p>
+        <p id="selected-duration-detail" class="summary-meta">
+          Select a task from the hierarchy or graph to inspect its duration.
+        </p>
+      </article>
+      <article class="summary-card">
+        <h2>Current path</h2>
+        <p id="path-duration-display" class="summary-value">—</p>
+        <p id="path-duration-detail" class="summary-meta">
+          Choose a Level 2 milestone to review its rolled-up timing.
+        </p>
+      </article>
+    </section>
 
     <main class="layout">
       <section class="sidebar" id="sidebar">
