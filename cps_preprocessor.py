@@ -226,16 +226,19 @@ def _fill_missing_dependencies(workbook: WorkbookData) -> Tuple[List[Dict[str, s
         parent = stack[-1] if stack else None
         if parent:
             parent_level = parent.get("level")
-            if (predecessors_header and not predecessors) and _is_valid_parent(level_number, parent_level):
-                predecessors.append(parent["id"])  # type: ignore[arg-type]
-                row[predecessors_header] = _join_ids(predecessors)
-                metadata.added_predecessors += 1
-            if successors_header and not parent["successors"] and _is_valid_parent(level_number, parent_level):
-                parent_successors: List[str] = parent["successors"]  # type: ignore[assignment]
-                parent_successors.append(task_id)
-                parent_row: Dict[str, str] = parent["row"]  # type: ignore[assignment]
-                parent_row[successors_header] = _join_ids(parent_successors)
-                metadata.added_successors += 1
+            if _is_valid_parent(level_number, parent_level):
+                if predecessors_header:
+                    parent_predecessors: List[str] = parent["predecessors"]  # type: ignore[assignment]
+                    if task_id not in parent_predecessors:
+                        parent_predecessors.append(task_id)
+                        parent_row: Dict[str, str] = parent["row"]  # type: ignore[assignment]
+                        parent_row[predecessors_header] = _join_ids(parent_predecessors)
+                        metadata.added_predecessors += 1
+                if successors_header:
+                    if parent["id"] not in successors:
+                        successors.append(parent["id"])
+                        row[successors_header] = _join_ids(successors)
+                        metadata.added_successors += 1
 
         stack.append(
             {
@@ -243,6 +246,7 @@ def _fill_missing_dependencies(workbook: WorkbookData) -> Tuple[List[Dict[str, s
                 "indent": current_indent,
                 "level": level_number,
                 "row": row,
+                "predecessors": predecessors,
                 "successors": successors,
             }
         )
