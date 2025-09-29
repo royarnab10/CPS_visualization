@@ -19,6 +19,7 @@ let selectedTask = null;
 const dom = {
   fileInput: document.getElementById('file-input'),
   loadSample: document.getElementById('load-sample'),
+  processingNotice: document.getElementById('processing-notice'),
   hierarchy: document.getElementById('hierarchy'),
   levelControls: document.getElementById('level-controls'),
   taskDetails: document.getElementById('task-details'),
@@ -58,24 +59,66 @@ dom.resetSelection.addEventListener('click', () => {
   }
 });
 
+function setProcessingState(message, active) {
+  if (!dom.processingNotice) return;
+  const displayMessage = message || 'Cleaning schedule dependencies…';
+  if (active) {
+    dom.processingNotice.textContent = displayMessage;
+    dom.processingNotice.hidden = false;
+  } else {
+    dom.processingNotice.hidden = true;
+  }
+  if (dom.fileInput) dom.fileInput.disabled = active;
+  if (dom.loadSample) dom.loadSample.disabled = active;
+}
+
+async function preprocessWorkbook(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await fetch('/api/preprocess', {
+    method: 'POST',
+    body: formData
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Preprocessing failed with status ${response.status}`);
+  }
+  return response.json();
+}
+
 async function handleFileInput(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  const arrayBuffer = await file.arrayBuffer();
-  const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-  const sheetName = workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[sheetName];
-  const records = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
-  prepareDataset(records, file.name);
+
+  try {
+    setProcessingState(`Cleaning ${file.name}…`, true);
+    const payload = await preprocessWorkbook(file);
+    const records = payload.records || payload.rows || [];
+    if (!Array.isArray(records) || records.length === 0) {
+      throw new Error('The preprocessing pipeline returned no rows.');
+    }
+    prepareDataset(records, file.name, {
+      cleaned: Boolean(payload.metadata?.cleaned),
+      metadata: payload.metadata || null
+    });
+  } catch (error) {
+    console.error('Failed to preprocess workbook', error);
+    alert('Unable to clean the uploaded file. Ensure the preprocessing service is running and try again.');
+  } finally {
+    setProcessingState('', false);
+    if (event.target) {
+      event.target.value = '';
+    }
+  }
 }
 
 async function loadSampleData() {
   const response = await fetch('data/sample_schedule.json');
   const records = await response.json();
-  prepareDataset(records, 'Sample schedule');
+  prepareDataset(records, 'Sample schedule', { cleaned: false });
 }
 
-function prepareDataset(records, label) {
+function prepareDataset(records, label, options = {}) {
   if (!records || records.length === 0) {
     alert('The provided worksheet is empty.');
     return;
@@ -97,7 +140,8 @@ function prepareDataset(records, label) {
     tasksById,
     dependencies,
     levels,
-    modified: false
+    modified: Boolean(options.cleaned),
+    metadata: options.metadata || null
   };
 
   if (dom.dependencyPanel) {
