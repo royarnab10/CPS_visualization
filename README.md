@@ -9,6 +9,7 @@ An interactive, browser-based tool for validating complex critical path schedule
 - **Interactive dependency graph** – Visualize predecessor/successor relationships, auto-include nearby context, and highlight task metadata.
 - **Dependency typing** – Add a `Dependency Type` column (FS/SS/SF/FF) to distinguish relationships; otherwise Finish-to-Start (FS) is assumed.
 - **Stakeholder-friendly UI** – Styled for projection or screen sharing; no coding experience required.
+- **Cleaning feedback & fallback** – Upload status messages highlight when indentation restored missing links and warn if the server falls back to raw workbook data.
 
 A lightweight sample dataset is included in [`webapp/data/sample_schedule.json`](webapp/data/sample_schedule.json) and the repository ships with the stakeholder workbook `CPS_Rules_comm_LPA_Readiness.xlsx` for real-world testing.
 
@@ -30,7 +31,7 @@ No runtime installation is required beyond a modern web browser. To keep setup l
    python server.py --port 8000
    ```
 
-   The server streams and cleans uploaded workbooks before handing them to the front-end. Large workbooks may take a few seconds to process while hierarchy-based dependencies are restored.
+   The server streams and cleans uploaded workbooks before handing them to the front-end. Large workbooks may take a few seconds to process while hierarchy-based dependencies are restored. If the server cannot be reached, the UI will fall back to the uncleaned workbook and display a warning banner.
 
 4. **Open the app** in your preferred browser at `http://localhost:8000`.
 5. **Load data**:

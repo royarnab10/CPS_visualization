@@ -20,6 +20,7 @@ const dom = {
   fileInput: document.getElementById('file-input'),
   loadSample: document.getElementById('load-sample'),
   processingNotice: document.getElementById('processing-notice'),
+  uploadStatus: document.getElementById('upload-status'),
   hierarchy: document.getElementById('hierarchy'),
   levelControls: document.getElementById('level-controls'),
   taskDetails: document.getElementById('task-details'),
@@ -68,20 +69,36 @@ function setProcessingState(message, active) {
   } else {
     dom.processingNotice.hidden = true;
   }
-  if (dom.fileInput) dom.fileInput.disabled = active;
+  if (dom.fileInput) {
+    dom.fileInput.disabled = active;
+    const label = dom.fileInput.closest('.file-input');
+    if (label) {
+      label.classList.toggle('disabled', active);
+    }
+  }
   if (dom.loadSample) dom.loadSample.disabled = active;
 }
 
 async function preprocessWorkbook(file) {
   const formData = new FormData();
   formData.append('file', file);
-  const response = await fetch('/api/preprocess', {
-    method: 'POST',
-    body: formData
-  });
+  let response;
+  try {
+    response = await fetch('/api/preprocess', {
+      method: 'POST',
+      body: formData
+    });
+  } catch (error) {
+    const networkError = new Error('Unable to reach the preprocessing service.');
+    networkError.cause = error;
+    networkError.code = 'NETWORK';
+    throw networkError;
+  }
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `Preprocessing failed with status ${response.status}`);
+    const serviceError = new Error(text || `Preprocessing failed with status ${response.status}`);
+    serviceError.code = 'SERVICE';
+    throw serviceError;
   }
   return response.json();
 }
@@ -97,13 +114,16 @@ async function handleFileInput(event) {
     if (!Array.isArray(records) || records.length === 0) {
       throw new Error('The preprocessing pipeline returned no rows.');
     }
+    const metadata = Object.assign({}, payload.metadata || {}, {
+      source: 'server'
+    });
     prepareDataset(records, file.name, {
       cleaned: Boolean(payload.metadata?.cleaned),
-      metadata: payload.metadata || null
+      metadata
     });
   } catch (error) {
     console.error('Failed to preprocess workbook', error);
-    alert('Unable to clean the uploaded file. Ensure the preprocessing service is running and try again.');
+    await handlePreprocessFailure(file, error);
   } finally {
     setProcessingState('', false);
     if (event.target) {
@@ -112,10 +132,37 @@ async function handleFileInput(event) {
   }
 }
 
+async function handlePreprocessFailure(file, error) {
+  try {
+    const fallbackRecords = await readWorkbookLocally(file);
+    if (!Array.isArray(fallbackRecords) || fallbackRecords.length === 0) {
+      throw new Error('The uploaded workbook does not contain any rows.');
+    }
+    prepareDataset(fallbackRecords, file.name, {
+      cleaned: false,
+      metadata: {
+        source: 'client',
+        error: error?.message || String(error || 'Unknown error')
+      }
+    });
+    alert(
+      'The preprocessing service was unreachable, so the workbook was loaded without automatic dependency cleaning.'
+    );
+  } catch (fallbackError) {
+    console.error('Unable to parse workbook locally', fallbackError);
+    alert('Unable to load the uploaded file. Please verify the workbook and try again.');
+  }
+}
+
 async function loadSampleData() {
   const response = await fetch('data/sample_schedule.json');
   const records = await response.json();
-  prepareDataset(records, 'Sample schedule', { cleaned: false });
+  prepareDataset(records, 'Sample schedule', {
+    cleaned: false,
+    metadata: {
+      source: 'sample'
+    }
+  });
 }
 
 function prepareDataset(records, label, options = {}) {
@@ -159,6 +206,21 @@ function prepareDataset(records, label, options = {}) {
   renderDependencies();
   updateGraph();
   renderTaskDetails();
+  renderUploadStatus();
+}
+
+async function readWorkbookLocally(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) {
+    throw new Error('The workbook does not contain any worksheets.');
+  }
+  const worksheet = workbook.Sheets[sheetName];
+  if (!worksheet) {
+    throw new Error('Unable to read the first worksheet from the workbook.');
+  }
+  return XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 }
 
 function normalizeRecord(record) {
@@ -259,6 +321,49 @@ function renderLegend() {
     '<span class="legend-item"><span class="legend-swatch" style="background:rgba(148,163,184,0.4);border:1px solid rgba(148,163,184,0.6);"></span>Dimmed outside focus</span>';
 
   dom.legend.innerHTML = items + context + dimmed;
+}
+
+function renderUploadStatus() {
+  if (!dom.uploadStatus) {
+    return;
+  }
+
+  if (!dataset || !dataset.metadata) {
+    dom.uploadStatus.textContent = '';
+    dom.uploadStatus.hidden = true;
+    return;
+  }
+
+  const metadata = dataset.metadata;
+  let message = '';
+
+  if (metadata.source === 'server') {
+    const addedPredecessors = Number(metadata.addedPredecessors || 0);
+    const addedSuccessors = Number(metadata.addedSuccessors || 0);
+    const totalAdded = addedPredecessors + addedSuccessors;
+
+    if (metadata.cleaned && totalAdded > 0) {
+      const details = [];
+      if (addedPredecessors > 0) {
+        details.push(`${addedPredecessors} predecessor${addedPredecessors === 1 ? '' : 's'}`);
+      }
+      if (addedSuccessors > 0) {
+        details.push(`${addedSuccessors} successor${addedSuccessors === 1 ? '' : 's'}`);
+      }
+      message = `Restored ${details.join(' and ')} from indentation gaps.`;
+    } else {
+      message = 'Upload cleaned successfully. No missing dependencies were inferred.';
+    }
+  } else if (metadata.source === 'client') {
+    message = 'Preprocessing service unavailable. Displaying the workbook without inferred dependencies.';
+  } else if (metadata.source === 'sample') {
+    message = 'Viewing bundled sample data with dependencies already defined.';
+  } else if (metadata.message) {
+    message = metadata.message;
+  }
+
+  dom.uploadStatus.textContent = message;
+  dom.uploadStatus.hidden = !message;
 }
 
 function renderLevelControls() {
