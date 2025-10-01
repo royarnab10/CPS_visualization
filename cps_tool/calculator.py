@@ -12,6 +12,7 @@ from typing import Dict, Iterable, Iterator, List, Mapping, MutableMapping, Sequ
 from .calendar import WorkCalendar
 from .models import (
     CycleResolution,
+    DependencyIssue,
     DependencySpec,
     ScheduleResult,
     ScheduledTask,
@@ -28,6 +29,32 @@ def _ensure_task_lookup(tasks: Sequence[TaskSpec]) -> Dict[int, TaskSpec]:
     if not lookup:
         raise ValueError("No tasks were provided for CPS calculation.")
     return lookup
+
+
+def _remove_missing_dependencies(
+    tasks: Sequence[TaskSpec], lookup: Mapping[int, TaskSpec]
+) -> List[DependencyIssue]:
+    issues: List[DependencyIssue] = []
+    for task in tasks:
+        cleaned: List[DependencySpec] = []
+        for dependency in task.dependencies:
+            if dependency.predecessor_uid in lookup:
+                cleaned.append(dependency)
+                continue
+            issues.append(
+                DependencyIssue(
+                    task_uid=task.uid,
+                    task_name=task.name,
+                    dependency=DependencySpec(
+                        predecessor_uid=dependency.predecessor_uid,
+                        relation_type=dependency.relation_type,
+                        lag_days=dependency.lag_days,
+                    ),
+                    reason="Missing predecessor task",
+                )
+            )
+        task.dependencies = cleaned
+    return issues
 
 
 def _build_successors(tasks: Sequence[TaskSpec]) -> Dict[int, List[tuple[int, DependencySpec]]]:
@@ -395,6 +422,7 @@ def calculate_schedule(
 
     tasks = _clone_tasks(list(task_specs))
     lookup = _ensure_task_lookup(tasks)
+    dependency_issues = _remove_missing_dependencies(tasks, lookup)
     cycle_resolutions, cycle_csv_path = _resolve_cycles(tasks)
     successors = _build_successors(tasks)
     order = _topological_order(tasks)
@@ -413,4 +441,5 @@ def calculate_schedule(
         tasks=ordered_tasks,
         cycle_resolutions=cycle_resolutions,
         cycle_adjusted_csv=cycle_csv_path,
+        dependency_issues=dependency_issues,
     )
