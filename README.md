@@ -18,6 +18,19 @@ A lightweight sample dataset is included in [`webapp/data/sample_schedule.json`]
 
 No runtime installation is required beyond a modern web browser. To keep setup lightweight on macOS or Windows, use the built-in Python interpreter (already available on macOS and easily installed via the Microsoft Store on Windows) to serve the static files. Any alternative static HTTP server (Node, Ruby, Go, etc.) works just as well.
 
+### 1.1 (Optional) create a Python virtual environment
+
+If you plan to use the bundled preprocessing server or the `cps_tool` command-line utilities, isolate the Python dependencies in a virtual environment and install the requirements once:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows use: .venv\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+This installs the [`mpxj`](https://www.mpxj.org/) parser used by the CLI to process Microsoft Project files. Reactivate the environment (`source .venv/bin/activate`) whenever you return to the project.
+
 ---
 
 ## 2. Quick start
@@ -109,10 +122,10 @@ This repository now bundles a lightweight command-line application that can extr
 ### 7.1. Prerequisites
 
 1. Python 3.10 or newer.
-2. The [`mpxj`](https://www.mpxj.org/) package (used to parse `.mpp` files). Install it once via:
+2. The [`mpxj`](https://www.mpxj.org/) package (used to parse `.mpp` files). Install it via the project requirements:
 
    ```bash
-   python -m pip install mpxj
+   python -m pip install -r requirements.txt
    ```
 
    > ℹ️ Only the `convert` command requires `mpxj`. The calculator works with CSV files alone.
