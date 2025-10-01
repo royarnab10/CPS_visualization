@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence, Tuple
+from typing import Dict, Iterable, Iterator, List, Mapping, MutableMapping, Sequence, Tuple
 
 from .calendar import WorkCalendar
 from .models import (
@@ -112,33 +112,46 @@ def _find_cycle(tasks: Sequence[TaskSpec]) -> Tuple[List[int], int, DependencySp
     successors = _build_successors(tasks)
     visited: set[int] = set()
     on_stack: set[int] = set()
-    stack: List[int] = []
-
-    def dfs(uid: int) -> Tuple[List[int], int, DependencySpec] | None:
-        visited.add(uid)
-        on_stack.add(uid)
-        stack.append(uid)
-        for successor_uid, dependency in successors.get(uid, []):
-            if successor_uid not in visited:
-                result = dfs(successor_uid)
-                if result:
-                    return result
-            elif successor_uid in on_stack:
-                try:
-                    cycle_start_index = stack.index(successor_uid)
-                except ValueError:  # pragma: no cover - defensive guard
-                    cycle_start_index = 0
-                cycle = stack[cycle_start_index:] + [successor_uid]
-                return cycle, successor_uid, dependency
-        stack.pop()
-        on_stack.remove(uid)
-        return None
 
     for task in tasks:
-        if task.uid not in visited:
-            result = dfs(task.uid)
-            if result:
-                return result
+        if task.uid in visited:
+            continue
+
+        traversal_stack: List[tuple[int, Iterator[tuple[int, DependencySpec]]]] = []
+        path: List[int] = []
+
+        visited.add(task.uid)
+        on_stack.add(task.uid)
+        traversal_stack.append((task.uid, iter(successors.get(task.uid, []))))
+        path.append(task.uid)
+
+        while traversal_stack:
+            current_uid, iterator = traversal_stack[-1]
+            try:
+                successor_uid, dependency = next(iterator)
+            except StopIteration:
+                traversal_stack.pop()
+                on_stack.remove(current_uid)
+                path.pop()
+                continue
+
+            if successor_uid not in visited:
+                visited.add(successor_uid)
+                on_stack.add(successor_uid)
+                traversal_stack.append(
+                    (successor_uid, iter(successors.get(successor_uid, [])))
+                )
+                path.append(successor_uid)
+                continue
+
+            if successor_uid in on_stack:
+                try:
+                    cycle_start_index = path.index(successor_uid)
+                except ValueError:  # pragma: no cover - defensive guard
+                    cycle_start_index = 0
+                cycle = path[cycle_start_index:] + [successor_uid]
+                return cycle, successor_uid, dependency
+
     return None
 
 
@@ -271,7 +284,7 @@ def _forward_pass(
                 raise ValueError(
                     f"Task {spec.uid} references missing predecessor {dependency.predecessor_uid}."
                 )
-            relation = dependency.relation_type.upper() or "FS"
+            relation = (dependency.relation_type or "FS").upper()
             if relation == "FS":
                 candidate = calendar.add_work_duration(
                     predecessor_task.earliest_finish, dependency.lag_days
@@ -328,7 +341,7 @@ def _backward_pass(
             candidate_finishes: List[datetime] = []
             for successor_uid, dependency in successor_records:
                 successor_task = scheduled[successor_uid]
-                relation = dependency.relation_type.upper() or "FS"
+                relation = (dependency.relation_type or "FS").upper()
                 if relation == "FS":
                     candidate_finish = calendar.subtract_work_duration(
                         successor_task.latest_start, dependency.lag_days
