@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Mapping, MutableMapping, Sequence, Tuple
+from typing import Dict, Iterable, Iterator, List, Mapping, MutableMapping, Sequence, Set, Tuple
 
 from .calendar import WorkCalendar
 from .models import (
@@ -63,6 +63,21 @@ def _build_successors(tasks: Sequence[TaskSpec]) -> Dict[int, List[tuple[int, De
         for dependency in task.dependencies:
             successors[dependency.predecessor_uid].append((task.uid, dependency))
     return successors
+
+
+def _build_descendants(tasks: Sequence[TaskSpec]) -> Dict[int, Set[int]]:
+    """Construct a mapping of outline parents to all descendant task UIDs."""
+
+    descendants: Dict[int, Set[int]] = defaultdict(set)
+    stack: List[tuple[int, int]] = []
+    for task in tasks:
+        level = task.outline_level or 0
+        while stack and stack[-1][1] >= level:
+            stack.pop()
+        for ancestor_uid, _ in stack:
+            descendants[ancestor_uid].add(task.uid)
+        stack.append((task.uid, level))
+    return descendants
 
 
 def _clone_tasks(tasks: Iterable[TaskSpec]) -> List[TaskSpec]:
@@ -299,13 +314,16 @@ def _forward_pass(
     tasks: Mapping[int, TaskSpec],
     calendar: WorkCalendar,
     project_start: datetime,
+    descendants: Mapping[int, Set[int]],
 ) -> Dict[int, ScheduledTask]:
     scheduled: Dict[int, ScheduledTask] = {}
     for uid in order:
         spec = tasks[uid]
         start = calendar.align_start(project_start)
-        finish = calendar.add_work_duration(start, spec.duration_days)
+        descendant_uids = descendants.get(uid)
         for dependency in spec.dependencies:
+            if descendant_uids and dependency.predecessor_uid in descendant_uids:
+                continue
             predecessor_task = scheduled.get(dependency.predecessor_uid)
             if predecessor_task is None:
                 raise ValueError(
@@ -342,7 +360,48 @@ def _forward_pass(
                 finish = calendar.add_work_duration(start, spec.duration_days)
             else:
                 raise ValueError(f"Unsupported dependency type: {dependency.relation_type}")
+        start = calendar.align_start(start)
+        finish = calendar.add_work_duration(start, spec.duration_days)
+
+        earliest_child_start = None
+        latest_child_finish = None
+        if descendant_uids:
+            for child_uid in descendant_uids:
+                child_task = scheduled.get(child_uid)
+                if child_task is None:
+                    continue
+                if earliest_child_start is None or child_task.earliest_start < earliest_child_start:
+                    earliest_child_start = child_task.earliest_start
+                if latest_child_finish is None or child_task.earliest_finish > latest_child_finish:
+                    latest_child_finish = child_task.earliest_finish
+            if earliest_child_start and latest_child_finish:
+                child_hours = calendar.work_hours_between(
+                    earliest_child_start, latest_child_finish
+                )
+                child_duration_days = child_hours / calendar.hours_per_day
+                effective_duration = max(spec.duration_days, child_duration_days)
+                spec.duration_days = effective_duration
+                if start > earliest_child_start:
+                    aligned_start = start
+                else:
+                    aligned_start = earliest_child_start
+                finish_candidate = calendar.add_work_duration(aligned_start, effective_duration)
+                if finish_candidate < latest_child_finish:
+                    finish_candidate = latest_child_finish
+                start = aligned_start
+                finish = finish_candidate
+
         start, finish = _apply_constraints(spec, start, finish, calendar)
+
+        if descendant_uids and earliest_child_start and latest_child_finish:
+            if start > earliest_child_start:
+                adjusted_start = start
+            else:
+                adjusted_start = earliest_child_start
+            adjusted_finish = max(finish, latest_child_finish)
+            if adjusted_start != start or adjusted_finish != finish:
+                start = calendar.align_start(adjusted_start)
+                finish = adjusted_finish
         scheduled[uid] = ScheduledTask(
             spec=spec,
             earliest_start=start,
@@ -359,6 +418,7 @@ def _backward_pass(
     scheduled: MutableMapping[int, ScheduledTask],
     successors: Mapping[int, List[tuple[int, DependencySpec]]],
     calendar: WorkCalendar,
+    descendants: Mapping[int, Set[int]],
 ) -> None:
     project_finish = max(task.earliest_finish for task in scheduled.values())
     for uid in reversed(order):
@@ -367,6 +427,9 @@ def _backward_pass(
         if successor_records:
             candidate_finishes: List[datetime] = []
             for successor_uid, dependency in successor_records:
+                descendant_uids = descendants.get(successor_uid)
+                if descendant_uids and uid in descendant_uids:
+                    continue
                 successor_task = scheduled[successor_uid]
                 relation = (dependency.relation_type or "FS").upper()
                 if relation == "FS":
@@ -426,13 +489,14 @@ def calculate_schedule(
     cycle_resolutions, cycle_csv_path = _resolve_cycles(tasks)
     successors = _build_successors(tasks)
     order = _topological_order(tasks)
+    descendants = _build_descendants(tasks)
     if calendar is None:
         calendar = WorkCalendar()
     if project_start is None:
         project_start = _infer_project_start(tasks) or datetime.now()
     project_start = calendar.align_start(project_start)
-    scheduled = _forward_pass(order, lookup, calendar, project_start)
-    _backward_pass(order, scheduled, successors, calendar)
+    scheduled = _forward_pass(order, lookup, calendar, project_start, descendants)
+    _backward_pass(order, scheduled, successors, calendar, descendants)
     project_finish = max(task.latest_finish for task in scheduled.values())
     ordered_tasks = [scheduled[uid] for uid in order]
     return ScheduleResult(
