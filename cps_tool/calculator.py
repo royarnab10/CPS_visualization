@@ -460,7 +460,10 @@ def _backward_pass(
                     )
                 candidate_finish = calendar.align_finish(candidate_finish)
                 candidate_finishes.append(candidate_finish)
-            latest_finish_limit = min(candidate_finishes)
+            if candidate_finishes:
+                latest_finish_limit = min(candidate_finishes)
+            else:
+                latest_finish_limit = project_finish
         else:
             latest_finish_limit = project_finish
         latest_start = calendar.subtract_work_duration(
