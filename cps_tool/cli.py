@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import argparse
-import csv
 from datetime import datetime, time
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from .calendar import WorkCalendar, parse_weekend
 from .calculator import calculate_schedule
@@ -38,17 +37,6 @@ def _parse_datetime(value: str) -> datetime:
     raise argparse.ArgumentTypeError(
         "Datetime values must use ISO-8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM[:SS])."
     )
-
-
-def _write_schedule(output_path: Path, rows: Iterable[dict[str, str]]) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    rows = list(rows)
-    if not rows:
-        return
-    with output_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
 
 
 def _handle_convert(args: argparse.Namespace) -> None:
@@ -105,7 +93,7 @@ def _handle_calculate(args: argparse.Namespace) -> None:
             print(f"    {issue.formatted_issue()}")
     if args.output:
         output_path = Path(args.output)
-        _write_schedule(output_path, result.to_rows())
+        result.to_csv(output_path)
         print(f"  Detailed schedule written to {output_path}")
 
 

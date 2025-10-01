@@ -1,8 +1,10 @@
 """Core dataclasses used by the CPS tooling package."""
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Iterable, List, Optional
 
 
@@ -129,3 +131,33 @@ class ScheduleResult:
                 }
             )
         return rows
+
+    def to_csv(self, destination: Path | str) -> Path:
+        """Write the calculated schedule to ``destination`` as CSV."""
+
+        rows = self.to_rows()
+        fieldnames = list(rows[0].keys()) if rows else [
+            "uid",
+            "name",
+            "earliest_start",
+            "earliest_finish",
+            "latest_start",
+            "latest_finish",
+            "total_float_hours",
+            "is_critical",
+            "duration_days",
+            "is_milestone",
+            "constraint_type",
+            "constraint_date",
+        ]
+
+        destination_path = Path(destination)
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with destination_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            if rows:
+                writer.writerows(rows)
+
+        return destination_path
