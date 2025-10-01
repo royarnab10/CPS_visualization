@@ -144,7 +144,7 @@ python -m cps_tool.cli calculate output/tasks.csv \
   --output output/cps_schedule.csv
 ```
 
-Both commands print a short summary to stdout. When `--output` is provided the calculator writes a CSV containing earliest/latest dates, float, and a critical-path flag for every task.
+Both commands print a short summary to stdout. When `--output` is provided the calculator writes a CSV containing earliest/latest dates, float, and a critical-path flag for every task. If dependency cycles are discovered they are reported during execution, the blocking dependency is removed automatically, and a cycle-adjusted CPS CSV is written alongside the summary.
 
 ### 7.3. Embedding as a Python module
 
@@ -171,6 +171,12 @@ result = calculate_schedule(tasks, project_start=datetime(2023, 1, 2, 8, 0), cal
 print("Project finish:", result.project_finish.isoformat())
 for task in result.critical_path():
     print("Critical:", task.spec.uid, task.spec.name)
+if result.cycle_resolutions:
+    print("Resolved cycles:")
+    for resolution in result.cycle_resolutions:
+        print("  ", resolution.formatted_cycle())
+    if result.cycle_adjusted_csv:
+        print("  Modified CPS written to", result.cycle_adjusted_csv)
 ```
 
 The `ScheduleResult.to_rows()` helper returns dictionaries that can be written back to CSV (the CLI uses the same method). The calculator honours Finish-to-Start, Start-to-Start, Finish-to-Finish, and Start-to-Finish dependencies, plus common constraint types such as “Must Start On” and “Finish No Earlier Than”.

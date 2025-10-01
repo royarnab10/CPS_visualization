@@ -85,6 +85,20 @@ def _handle_calculate(args: argparse.Namespace) -> None:
         print(f"  Working duration: {duration_hours:.2f} hours ({duration_days:.2f} days)")
     critical_count = sum(1 for task in result.tasks if task.is_critical)
     print(f"  Critical tasks: {critical_count}")
+    if result.cycle_resolutions:
+        print("  Dependency cycles detected and resolved:")
+        for resolution in result.cycle_resolutions:
+            print(f"    Cycle: {resolution.formatted_cycle()}")
+            dependency = resolution.removed_dependency
+            relation = (dependency.relation_type or "FS").upper()
+            lag = f"{dependency.lag_days:g}"
+            print(
+                "      Removed dependency: "
+                f"{resolution.removed_from_task_uid} ({resolution.removed_from_task_name}) "
+                f"<- {dependency.predecessor_uid} [{relation} lag {lag} days]"
+            )
+        if result.cycle_adjusted_csv:
+            print(f"  Cycle-adjusted CPS written to {result.cycle_adjusted_csv}")
     if args.output:
         output_path = Path(args.output)
         _write_schedule(output_path, result.to_rows())
