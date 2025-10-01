@@ -3,32 +3,46 @@ from __future__ import annotations
 
 import csv
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
-from typing import List
-
-try:  # pragma: no cover - import resolution depends on mpxj version
-    from mpxj.enums import TimeUnit  # type: ignore[attr-defined]
-except ModuleNotFoundError as exc:  # pragma: no cover - missing dependency
-    raise ImportError(
-        "mpxj is required to convert Microsoft Project schedules. "
-        "Install the package with its optional Java dependencies as "
-        "documented in the README."
-    ) from exc
-except ImportError:  # pragma: no cover - fallback for older releases
-    try:
-        from mpxj import TimeUnit  # type: ignore[no-redef]
-    except ModuleNotFoundError as exc:  # pragma: no cover - missing dependency
-        raise ImportError(
-            "mpxj is required to convert Microsoft Project schedules. "
-            "Install the package with its optional Java dependencies as "
-            "documented in the README."
-        ) from exc
-from mpxj.reader import UniversalProjectReader
+from typing import List, Tuple
 
 from .models import DependencySpec, TaskSpec
 
 
+_IMPORT_HELP = (
+    "mpxj is required to convert Microsoft Project schedules. "
+    "Install the package with its optional Java dependencies as documented in the README."
+)
+
+
+@lru_cache(maxsize=1)
+def _load_mpxj() -> Tuple[object, object]:
+    """Lazily import the mpxj modules that are required for conversion."""
+
+    try:  # pragma: no cover - import resolution depends on mpxj version
+        from mpxj.enums import TimeUnit  # type: ignore[attr-defined]
+    except ModuleNotFoundError as exc:  # pragma: no cover - missing dependency
+        try:
+            from mpxj import TimeUnit  # type: ignore[no-redef]
+        except ModuleNotFoundError as inner_exc:  # pragma: no cover - missing dependency
+            raise ImportError(_IMPORT_HELP) from inner_exc
+    except ImportError:  # pragma: no cover - fallback for older releases
+        try:
+            from mpxj import TimeUnit  # type: ignore[no-redef]
+        except ModuleNotFoundError as exc:  # pragma: no cover - missing dependency
+            raise ImportError(_IMPORT_HELP) from exc
+
+    try:
+        from mpxj.reader import UniversalProjectReader
+    except ModuleNotFoundError as exc:  # pragma: no cover - missing dependency
+        raise ImportError(_IMPORT_HELP) from exc
+
+    return TimeUnit, UniversalProjectReader
+
+
 def _duration_to_days(duration) -> float:
+    TimeUnit, _ = _load_mpxj()
     if duration is None:
         return 0.0
     converted = duration.convert(TimeUnit.DAYS)
@@ -57,6 +71,7 @@ def _safe_datetime(value) -> datetime | None:
 
 
 def extract_tasks_from_mpp(path: str | Path, include_summary: bool = False) -> List[TaskSpec]:
+    _, UniversalProjectReader = _load_mpxj()
     project = UniversalProjectReader().read(str(path))
     tasks: List[TaskSpec] = []
     for task in project.tasks:
