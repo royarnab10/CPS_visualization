@@ -180,3 +180,5 @@ if result.cycle_resolutions:
 ```
 
 The `ScheduleResult.to_rows()` helper returns dictionaries that can be written back to CSV (the CLI uses the same method). The calculator honours Finish-to-Start, Start-to-Start, Finish-to-Finish, and Start-to-Finish dependencies, plus common constraint types such as “Must Start On” and “Finish No Earlier Than”.
+
+Call `ScheduleResult.to_csv(path)` to persist the calculated schedule directly to disk. The generated CSV lists each task with its earliest/latest start and finish timestamps, total float, and critical-path flag so the data can be analysed in other tools.
