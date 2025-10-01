@@ -6,7 +6,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from mpxj import TimeUnit
+try:  # pragma: no cover - import resolution depends on mpxj version
+    from mpxj.enums import TimeUnit  # type: ignore[attr-defined]
+except ModuleNotFoundError as exc:  # pragma: no cover - missing dependency
+    raise ImportError(
+        "mpxj is required to convert Microsoft Project schedules. "
+        "Install the package with its optional Java dependencies as "
+        "documented in the README."
+    ) from exc
+except ImportError:  # pragma: no cover - fallback for older releases
+    try:
+        from mpxj import TimeUnit  # type: ignore[no-redef]
+    except ModuleNotFoundError as exc:  # pragma: no cover - missing dependency
+        raise ImportError(
+            "mpxj is required to convert Microsoft Project schedules. "
+            "Install the package with its optional Java dependencies as "
+            "documented in the README."
+        ) from exc
 from mpxj.reader import UniversalProjectReader
 
 from .models import DependencySpec, TaskSpec
