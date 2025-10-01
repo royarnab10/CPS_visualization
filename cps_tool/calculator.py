@@ -1,13 +1,22 @@
 """Critical Path Schedule calculator based on CSV task definitions."""
 from __future__ import annotations
 
+import csv
 import heapq
 from collections import defaultdict
+from dataclasses import replace
 from datetime import datetime
-from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence
+from pathlib import Path
+from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence, Tuple
 
 from .calendar import WorkCalendar
-from .models import DependencySpec, ScheduleResult, ScheduledTask, TaskSpec
+from .models import (
+    CycleResolution,
+    DependencySpec,
+    ScheduleResult,
+    ScheduledTask,
+    TaskSpec,
+)
 
 
 def _ensure_task_lookup(tasks: Sequence[TaskSpec]) -> Dict[int, TaskSpec]:
@@ -27,6 +36,165 @@ def _build_successors(tasks: Sequence[TaskSpec]) -> Dict[int, List[tuple[int, De
         for dependency in task.dependencies:
             successors[dependency.predecessor_uid].append((task.uid, dependency))
     return successors
+
+
+def _clone_tasks(tasks: Iterable[TaskSpec]) -> List[TaskSpec]:
+    cloned: List[TaskSpec] = []
+    for task in tasks:
+        cloned.append(
+            replace(
+                task,
+                dependencies=[
+                    DependencySpec(
+                        predecessor_uid=dependency.predecessor_uid,
+                        relation_type=dependency.relation_type,
+                        lag_days=dependency.lag_days,
+                    )
+                    for dependency in task.dependencies
+                ],
+            )
+        )
+    return cloned
+
+
+def _format_dependency(dependency: DependencySpec) -> str:
+    relation = (dependency.relation_type or "FS").upper()
+    lag = f"{dependency.lag_days:g}"
+    return f"{dependency.predecessor_uid}:{relation}:{lag}"
+
+
+def _tasks_to_rows(tasks: Sequence[TaskSpec]) -> List[dict[str, str]]:
+    rows: List[dict[str, str]] = []
+    for task in tasks:
+        predecessors = ";".join(
+            _format_dependency(dependency) for dependency in task.dependencies
+        )
+        rows.append(
+            {
+                "uid": str(task.uid),
+                "name": task.name,
+                "duration_days": f"{task.duration_days:.3f}",
+                "is_milestone": "yes" if task.is_milestone else "no",
+                "outline_level": str(task.outline_level) if task.outline_level else "",
+                "constraint_type": task.constraint_type or "",
+                "constraint_date": task.constraint_date.isoformat()
+                if task.constraint_date
+                else "",
+                "calendar": task.calendar_name or "",
+                "predecessors": predecessors,
+                "start": task.original_start.isoformat()
+                if task.original_start
+                else "",
+                "finish": task.original_finish.isoformat()
+                if task.original_finish
+                else "",
+            }
+        )
+    return rows
+
+
+def _write_cycle_adjusted_tasks(tasks: Sequence[TaskSpec]) -> str:
+    output_dir = Path("outputs")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = output_dir / f"cycle_resolved_cps_{timestamp}.csv"
+    rows = _tasks_to_rows(tasks)
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        if not rows:
+            return str(output_path)
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    return str(output_path)
+
+
+def _find_cycle(tasks: Sequence[TaskSpec]) -> Tuple[List[int], int, DependencySpec] | None:
+    successors = _build_successors(tasks)
+    visited: set[int] = set()
+    on_stack: set[int] = set()
+    stack: List[int] = []
+
+    def dfs(uid: int) -> Tuple[List[int], int, DependencySpec] | None:
+        visited.add(uid)
+        on_stack.add(uid)
+        stack.append(uid)
+        for successor_uid, dependency in successors.get(uid, []):
+            if successor_uid not in visited:
+                result = dfs(successor_uid)
+                if result:
+                    return result
+            elif successor_uid in on_stack:
+                try:
+                    cycle_start_index = stack.index(successor_uid)
+                except ValueError:  # pragma: no cover - defensive guard
+                    cycle_start_index = 0
+                cycle = stack[cycle_start_index:] + [successor_uid]
+                return cycle, successor_uid, dependency
+        stack.pop()
+        on_stack.remove(uid)
+        return None
+
+    for task in tasks:
+        if task.uid not in visited:
+            result = dfs(task.uid)
+            if result:
+                return result
+    return None
+
+
+def _resolve_cycles(tasks: List[TaskSpec]) -> tuple[List[CycleResolution], str | None]:
+    if not tasks:
+        return [], None
+
+    lookup = {task.uid: task for task in tasks}
+    resolutions: List[CycleResolution] = []
+
+    while True:
+        cycle_info = _find_cycle(tasks)
+        if not cycle_info:
+            break
+        cycle_uids, successor_uid, dependency = cycle_info
+        successor_task = lookup.get(successor_uid)
+        if successor_task is None:
+            break
+        removed_dependency = None
+        relation_upper = (dependency.relation_type or "FS").upper()
+        new_dependencies: List[DependencySpec] = []
+        for existing in successor_task.dependencies:
+            if (
+                removed_dependency is None
+                and existing.predecessor_uid == dependency.predecessor_uid
+                and (existing.relation_type or "FS").upper() == relation_upper
+                and abs(existing.lag_days - dependency.lag_days) < 1e-9
+            ):
+                removed_dependency = DependencySpec(
+                    predecessor_uid=existing.predecessor_uid,
+                    relation_type=existing.relation_type,
+                    lag_days=existing.lag_days,
+                )
+                continue
+            new_dependencies.append(existing)
+        if removed_dependency is None:  # pragma: no cover - defensive guard
+            break
+        successor_task.dependencies = new_dependencies
+        cycle_names = [
+            lookup[uid].name if uid in lookup else f"Task {uid}"
+            for uid in cycle_uids
+        ]
+        resolutions.append(
+            CycleResolution(
+                cycle_task_uids=cycle_uids,
+                cycle_task_names=cycle_names,
+                removed_from_task_uid=successor_task.uid,
+                removed_from_task_name=successor_task.name,
+                removed_dependency=removed_dependency,
+            )
+        )
+
+    csv_path = None
+    if resolutions:
+        csv_path = _write_cycle_adjusted_tasks(tasks)
+    return resolutions, csv_path
 
 
 def _topological_order(tasks: Sequence[TaskSpec]) -> List[int]:
@@ -212,8 +380,9 @@ def calculate_schedule(
 ) -> ScheduleResult:
     """Compute earliest and latest dates for the provided tasks."""
 
-    tasks = list(task_specs)
+    tasks = _clone_tasks(list(task_specs))
     lookup = _ensure_task_lookup(tasks)
+    cycle_resolutions, cycle_csv_path = _resolve_cycles(tasks)
     successors = _build_successors(tasks)
     order = _topological_order(tasks)
     if calendar is None:
@@ -229,4 +398,6 @@ def calculate_schedule(
         project_start=project_start,
         project_finish=project_finish,
         tasks=ordered_tasks,
+        cycle_resolutions=cycle_resolutions,
+        cycle_adjusted_csv=cycle_csv_path,
     )

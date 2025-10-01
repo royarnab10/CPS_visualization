@@ -19,6 +19,26 @@ class DependencySpec:
 
 
 @dataclass(slots=True)
+class CycleResolution:
+    """Describe how a dependency cycle was resolved."""
+
+    cycle_task_uids: List[int]
+    cycle_task_names: List[str]
+    removed_from_task_uid: int
+    removed_from_task_name: str
+    removed_dependency: DependencySpec
+
+    def formatted_cycle(self) -> str:
+        """Return a user-friendly representation of the cycle."""
+
+        segments = [
+            f"{uid} ({name})"
+            for uid, name in zip(self.cycle_task_uids, self.cycle_task_names)
+        ]
+        return " -> ".join(segments)
+
+
+@dataclass(slots=True)
 class TaskSpec:
     """Normalized task information extracted from the Microsoft Project file."""
 
@@ -62,6 +82,8 @@ class ScheduleResult:
     project_start: datetime
     project_finish: datetime
     tasks: List[ScheduledTask]
+    cycle_resolutions: List[CycleResolution] = field(default_factory=list)
+    cycle_adjusted_csv: Optional[str] = None
 
     def critical_path(self) -> List[ScheduledTask]:
         return [task for task in self.tasks if task.is_critical]
