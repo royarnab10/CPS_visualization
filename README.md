@@ -96,3 +96,68 @@ Tip: For complex reviews, start with only L2 milestones selected, then progressi
 | Dependency types all read `FS`. | Add a `Dependency Type` column with comma-separated values that mirror the `Predecessors IDs` sequence for each row (e.g., `FS,SS`). |
 
 For further enhancements, fork the repository and tailor the UI/logic in `webapp/app.js`—no backend code is involved.
+
+---
+
+## 7. MPP extraction & Python critical path calculator
+
+This repository now bundles a lightweight command-line application that can extract task data from a Microsoft Project (`.mpp`) schedule and reproduce the critical path schedule calculation entirely in Python. The tool is split into two parts:
+
+- **`convert`** – reads an `.mpp` file (such as the included `Generic CPS for I-O.mpp`) and emits a normalized CSV file with durations, dependencies, constraints, and baseline dates.
+- **`calculate`** – consumes the CSV output (or any CSV that follows the same column layout) and computes earliest/latest start and finish dates, task float, and the overall programme duration using a simple working-day calendar.
+
+### 7.1. Prerequisites
+
+1. Python 3.10 or newer.
+2. The [`mpxj`](https://www.mpxj.org/) package (used to parse `.mpp` files). Install it once via:
+
+   ```bash
+   python -m pip install mpxj
+   ```
+
+   > ℹ️ Only the `convert` command requires `mpxj`. The calculator works with CSV files alone.
+
+### 7.2. Command-line usage
+
+The CLI is exposed through `python -m cps_tool.cli`. Use `--help` at any time to discover available flags.
+
+```bash
+# Export the bundled sample schedule to CSV
+python -m cps_tool.cli convert 'Generic CPS for I-O.mpp' output/tasks.csv
+
+# Recalculate the critical path using an 08:00–17:00 workday (Mon–Fri)
+python -m cps_tool.cli calculate output/tasks.csv \
+  --project-start 2023-01-02T08:00 \
+  --output output/cps_schedule.csv
+```
+
+Both commands print a short summary to stdout. When `--output` is provided the calculator writes a CSV containing earliest/latest dates, float, and a critical-path flag for every task.
+
+### 7.3. Embedding as a Python module
+
+All functionality is also available programmatically:
+
+```python
+from datetime import datetime
+
+from cps_tool import (
+    WorkCalendar,
+    calculate_schedule,
+    convert_mpp_to_csv,
+    load_tasks_from_csv,
+)
+
+# Step 1 – extract tasks from Microsoft Project (optional if you already have CSV)
+csv_path = convert_mpp_to_csv("Generic CPS for I-O.mpp", "output/tasks.csv")
+
+# Step 2 – load tasks and run the calculator
+tasks = load_tasks_from_csv(csv_path)
+calendar = WorkCalendar()  # defaults to 08:00–17:00, Monday–Friday
+result = calculate_schedule(tasks, project_start=datetime(2023, 1, 2, 8, 0), calendar=calendar)
+
+print("Project finish:", result.project_finish.isoformat())
+for task in result.critical_path():
+    print("Critical:", task.spec.uid, task.spec.name)
+```
+
+The `ScheduleResult.to_rows()` helper returns dictionaries that can be written back to CSV (the CLI uses the same method). The calculator honours Finish-to-Start, Start-to-Start, Finish-to-Finish, and Start-to-Finish dependencies, plus common constraint types such as “Must Start On” and “Finish No Earlier Than”.
