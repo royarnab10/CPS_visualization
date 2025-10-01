@@ -182,3 +182,15 @@ if result.cycle_resolutions:
 The `ScheduleResult.to_rows()` helper returns dictionaries that can be written back to CSV (the CLI uses the same method). The calculator honours Finish-to-Start, Start-to-Start, Finish-to-Finish, and Start-to-Finish dependencies, plus common constraint types such as “Must Start On” and “Finish No Earlier Than”.
 
 Call `ScheduleResult.to_csv(path)` to persist the calculated schedule directly to disk. The generated CSV lists each task with its earliest/latest start and finish timestamps, total float, and critical-path flag so the data can be analysed in other tools.
+
+### 7.4. Exporting the schedule to XLSX
+
+The repository includes a helper script that mirrors the `cps_rules_level_4.xlsx` workbook layout while augmenting it with calculated dates. Provide the same CSV you would pass to `cps_tool.cli calculate` and specify an output path for the workbook:
+
+```bash
+python scripts/calculate_schedule.py outputs/generic_cps_sample.csv \
+  --project-start 2023-01-02T08:00 \
+  --output outputs/generic_cps_schedule.xlsx
+```
+
+The generated sheet preserves key metadata columns—such as responsible teams and approval requirements when they are present in the source CSV—and adds earliest/latest start and finish dates, task float, and critical-path flags for each activity.
