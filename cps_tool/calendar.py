@@ -106,14 +106,21 @@ class WorkCalendar:
             return 0.0
         current = self.align_start(start)
         end = self.align_finish(finish)
+        if end <= current:
+            return 0.0
+        if current.date() == end.date():
+            return (end - current).total_seconds() / 3600.0
+
         hours = 0.0
-        while current < end:
-            day_end = datetime.combine(current.date(), self.workday_end)
-            segment_end = min(day_end, end)
-            hours += (segment_end - current).total_seconds() / 3600.0
-            if segment_end >= end:
-                break
-            current = self._next_workday_start(current.date() + timedelta(days=1))
+        day_end = datetime.combine(current.date(), self.workday_end)
+        hours += (day_end - current).total_seconds() / 3600.0
+
+        next_day = current.date() + timedelta(days=1)
+        full_days = self._count_workdays_between(next_day, end.date())
+        hours += full_days * self.hours_per_day
+
+        day_start = datetime.combine(end.date(), self.workday_start)
+        hours += (end - day_start).total_seconds() / 3600.0
         return hours
 
     # ------------------------------------------------------------------
@@ -130,6 +137,22 @@ class WorkCalendar:
         while previous_day.weekday() in self.weekend_days:
             previous_day -= timedelta(days=1)
         return datetime.combine(previous_day, self.workday_end)
+
+    def _count_workdays_between(self, start_date: date, end_date: date) -> int:
+        """Count working days in the half-open interval [start_date, end_date)."""
+
+        if start_date >= end_date:
+            return 0
+        weekend = set(self.weekend_days)
+        total_days = (end_date - start_date).days
+        full_weeks, remainder = divmod(total_days, 7)
+        workdays = full_weeks * (7 - len(weekend))
+        day = start_date + timedelta(days=full_weeks * 7)
+        for _ in range(remainder):
+            if day.weekday() not in weekend:
+                workdays += 1
+            day += timedelta(days=1)
+        return workdays
 
     def describe(self) -> str:
         weekend = ", ".join([self._weekday_name(d) for d in self.weekend_days])

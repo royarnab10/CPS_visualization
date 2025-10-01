@@ -99,6 +99,10 @@ def _handle_calculate(args: argparse.Namespace) -> None:
             )
         if result.cycle_adjusted_csv:
             print(f"  Cycle-adjusted CPS written to {result.cycle_adjusted_csv}")
+    if result.dependency_issues:
+        print("  Invalid dependencies removed:")
+        for issue in result.dependency_issues:
+            print(f"    {issue.formatted_issue()}")
     if args.output:
         output_path = Path(args.output)
         _write_schedule(output_path, result.to_rows())

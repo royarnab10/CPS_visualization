@@ -39,6 +39,24 @@ class CycleResolution:
 
 
 @dataclass(slots=True)
+class DependencyIssue:
+    """Describe a dependency that had to be removed due to invalid data."""
+
+    task_uid: int
+    task_name: str
+    dependency: DependencySpec
+    reason: str
+
+    def formatted_issue(self) -> str:
+        relation = (self.dependency.relation_type or "FS").upper()
+        lag = f"{self.dependency.lag_days:g}"
+        return (
+            f"Task {self.task_uid} ({self.task_name}) <- "
+            f"{self.dependency.predecessor_uid} [{relation} lag {lag} days]: {self.reason}"
+        )
+
+
+@dataclass(slots=True)
 class TaskSpec:
     """Normalized task information extracted from the Microsoft Project file."""
 
@@ -83,6 +101,7 @@ class ScheduleResult:
     project_finish: datetime
     tasks: List[ScheduledTask]
     cycle_resolutions: List[CycleResolution] = field(default_factory=list)
+    dependency_issues: List[DependencyIssue] = field(default_factory=list)
     cycle_adjusted_csv: Optional[str] = None
 
     def critical_path(self) -> List[ScheduledTask]:
