@@ -6,10 +6,13 @@ import json
 import re
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
+
+import pandas as pd
 
 
 @dataclass
@@ -72,6 +75,13 @@ def preprocess_excel(data: bytes) -> Tuple[List[Dict[str, str]], Dict[str, int |
 
     result = preprocess_excel_with_workbook(data)
     return result.rows, result.metadata
+
+
+def preprocess_excel_to_dataframe(data: bytes) -> pd.DataFrame:
+    """Return the cleaned workbook rows as a :class:`pandas.DataFrame`."""
+
+    result = preprocess_excel_with_workbook(data)
+    return _result_to_dataframe(result)
 
 
 # ---------------------------------------------------------------------------
@@ -646,6 +656,19 @@ def _column_letter(index: int) -> str:
     return "".join(reversed(letters))
 
 
+def _result_to_dataframe(result: PreprocessResult) -> pd.DataFrame:
+    """Convert a :class:`PreprocessResult` into a :class:`pandas.DataFrame`."""
+
+    dataframe = pd.DataFrame(result.rows)
+    if result.workbook.headers:
+        headers = list(result.workbook.headers)
+        remaining_columns = [
+            column for column in dataframe.columns if column not in headers
+        ]
+        dataframe = dataframe.reindex(columns=headers + remaining_columns, fill_value="")
+    return dataframe
+
+
 # ---------------------------------------------------------------------------
 # CLI helper for manual execution
 
@@ -656,10 +679,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Clean CPS workbooks by inferring hierarchy dependencies.")
     parser.add_argument("input", help="Path to the source .xlsx workbook")
     parser.add_argument("output", nargs="?", help="Optional JSON file for the cleaned rows")
+    parser.add_argument(
+        "--out-dir",
+        dest="out_dir",
+        help="Directory where the cleaned Excel workbook will be written.",
+    )
     args = parser.parse_args()
 
     with open(args.input, "rb") as source:
-        records, metadata = preprocess_excel(source.read())
+        data = source.read()
+
+    result = preprocess_excel_with_workbook(data)
+    records = result.rows
+    metadata = result.metadata
 
     if args.output:
         with open(args.output, "w", encoding="utf-8") as destination:
@@ -667,6 +699,13 @@ def main() -> None:
     else:
         json.dump({"records": records, "metadata": metadata}, sys.stdout, indent=2)
         sys.stdout.write("\n")
+
+    if args.out_dir:
+        output_directory = Path(args.out_dir)
+        output_directory.mkdir(parents=True, exist_ok=True)
+        output_path = output_directory / f"{Path(args.input).stem}_cleaned.xlsx"
+        dataframe = _result_to_dataframe(result)
+        dataframe.to_excel(output_path, index=False)
 
 
 if __name__ == "__main__":
