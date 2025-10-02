@@ -17,6 +17,8 @@ WORK_DAYS_PER_MONTH = 20.0
 
 SUPPORTED_DEP_TYPES = {"FS", "SS", "FF", "SF"}
 
+LEVEL_PATTERN = re.compile(r"[Ll](?:evel)?\s*(\d+)")
+
 
 @dataclass
 class Dependency:
@@ -301,6 +303,34 @@ def parse_dependencies(raw: str) -> List[Dependency]:
     return dependencies
 
 
+def level_index(level: str) -> Optional[int]:
+    match = LEVEL_PATTERN.search(level.strip())
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def enforce_level_dependency_types(tasks: Dict[str, Task]) -> None:
+    for task in tasks.values():
+        task_level = level_index(task.level)
+        if task_level is None:
+            continue
+        for dep in task.predecessors:
+            pred = tasks.get(dep.pred_id)
+            if pred is None:
+                continue
+            pred_level = level_index(pred.level)
+            if pred_level is None:
+                continue
+            if pred_level == task_level + 1:
+                dep.dep_type = "FF"
+            elif task_level == 1 and pred_level == 1:
+                dep.dep_type = "FS"
+
+
 def compute_effective_durations(tasks: Dict[str, Task], targeted_levels: Iterable[str]) -> None:
     targeted = {level.lower() for level in targeted_levels}
     for task in tasks.values():
@@ -357,6 +387,7 @@ def load_tasks(
         raise ValueError(
             "Unresolved predecessor references detected: " + ", ".join(missing_list)
         )
+    enforce_level_dependency_types(tasks)
     compute_effective_durations(tasks, targeted_levels)
     return tasks, sorted(missing)
 
