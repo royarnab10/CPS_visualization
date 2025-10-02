@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import io
 import json
-import math
 import re
 import sys
 from dataclasses import dataclass
@@ -18,20 +17,6 @@ class WorkbookData:
     rows: List[Dict[str, str]]
     header_lookup: Dict[str, str]
     indent_by_row: List[int]
-
-
-@dataclass
-class TaskDurationInfo:
-    """Track duration context for a single task."""
-
-    row: Dict[str, str]
-    level: Optional[int]
-    base_days: Optional[float]
-    successors: List[str]
-    dependency_types: List[str]
-    predecessors: List[str]
-    computed: Optional[float] = None
-    child_sum: float = 0.0
 
 
 @dataclass
@@ -55,9 +40,7 @@ def preprocess_excel(data: bytes) -> Tuple[List[Dict[str, str]], Dict[str, int |
     """Parse and clean an uploaded Excel workbook."""
     workbook = _read_workbook(data)
     _, dependency_metadata = _fill_missing_dependencies(workbook)
-    duration_metadata = _enrich_with_durations(workbook)
     metadata = dependency_metadata.to_dict()
-    metadata.update(duration_metadata)
     return workbook.rows, metadata
 
 
@@ -276,232 +259,6 @@ def _is_valid_parent(child_level: Optional[int], parent_level: Optional[int]) ->
     if child_level is None or parent_level is None:
         return True
     return child_level == parent_level + 1
-
-
-# ---------------------------------------------------------------------------
-# Duration computation
-
-
-def _enrich_with_durations(workbook: WorkbookData) -> Dict[str, object]:
-    """Normalize duration fields and calculate aggregate task durations."""
-
-    id_header = _resolve_header(workbook.header_lookup, ("taskid", "task id", "id"))
-    level_header = _resolve_header(workbook.header_lookup, ("task level", "level"))
-    base_header = _resolve_header(
-        workbook.header_lookup,
-        ("base duration", "duration", "duration (days)", "task duration"),
-    )
-
-    if not id_header or not base_header:
-        return {}
-
-    successors_header = _resolve_header(
-        workbook.header_lookup, ("successors ids", "successor ids", "successors")
-    )
-    predecessors_header = _resolve_header(
-        workbook.header_lookup, ("predecessors ids", "predecessor ids", "predecessors")
-    )
-    dependency_header = _resolve_header(
-        workbook.header_lookup, ("dependency type", "dependency types")
-    )
-
-    calc_header = "Calculated Duration (days)"
-    if calc_header not in workbook.header_lookup:
-        workbook.header_lookup[_normalize_key(calc_header)] = calc_header
-        if calc_header not in workbook.headers:
-            workbook.headers.append(calc_header)
-
-    tasks: Dict[str, TaskDurationInfo] = {}
-    normalized_count = 0
-
-    for row in workbook.rows:
-        task_id = _stringify(row.get(id_header, ""))
-        if not task_id:
-            continue
-
-        original_value = row.get(base_header, "")
-        updated_value, base_days, changed = _normalize_duration_value(original_value)
-        if changed or updated_value is not None:
-            row[base_header] = updated_value or ""
-        if changed:
-            normalized_count += 1
-
-        level = _parse_level(row.get(level_header, "") if level_header else "")
-        successors = _split_ids(row.get(successors_header, "")) if successors_header else []
-        predecessors = (
-            _split_ids(row.get(predecessors_header, "")) if predecessors_header else []
-        )
-        dependency_types = (
-            [_normalize_dependency_type(value) for value in _split_ids(row.get(dependency_header, ""))]
-            if dependency_header
-            else []
-        )
-
-        tasks[task_id] = TaskDurationInfo(
-            row=row,
-            level=level,
-            base_days=base_days,
-            successors=successors,
-            dependency_types=dependency_types,
-            predecessors=predecessors,
-        )
-
-    if not tasks:
-        return {}
-
-    visiting: set[str] = set()
-
-    def compute_total(task_id: str) -> float:
-        info = tasks.get(task_id)
-        if info is None:
-            return 0.0
-        if info.computed is not None:
-            return info.computed
-        if task_id in visiting:
-            # Cycle detected. Fall back to the task's own duration to avoid recursion loops.
-            info.computed = info.base_days or 0.0
-            return info.computed
-
-        visiting.add(task_id)
-        total_children = 0.0
-        if info.successors:
-            for index, successor_id in enumerate(info.successors):
-                child_total = compute_total(successor_id)
-                dependency_type = _dependency_type_for(info.dependency_types, index)
-                total_children += _apply_dependency_contribution(dependency_type, child_total)
-        visiting.remove(task_id)
-
-        if info.successors:
-            info.child_sum = total_children
-            info.computed = total_children
-        else:
-            info.child_sum = info.base_days or 0.0
-            info.computed = info.base_days or 0.0
-
-        return info.computed
-
-    for task_identifier in tasks:
-        compute_total(task_identifier)
-
-    removed_parent_durations = 0
-    for task_identifier, info in tasks.items():
-        row = info.row
-        if info.computed is not None:
-            row[calc_header] = _format_duration_days(info.computed) if info.computed else "0d"
-        if (
-            info.successors
-            and info.base_days is not None
-            and info.level in {2, 3}
-            and not _duration_close(info.base_days, info.child_sum)
-        ):
-            row[base_header] = ""
-            info.base_days = None
-            removed_parent_durations += 1
-
-    root_ids = [task_id for task_id, info in tasks.items() if not info.predecessors]
-    if not root_ids:
-        min_level = min(
-            (info.level for info in tasks.values() if info.level is not None),
-            default=None,
-        )
-        if min_level is not None:
-            root_ids = [task_id for task_id, info in tasks.items() if info.level == min_level]
-
-    total_duration = sum(tasks[root_id].computed or 0.0 for root_id in root_ids)
-
-    metadata: Dict[str, object] = {}
-    if total_duration:
-        metadata["totalDurationDays"] = round(total_duration, 2)
-        metadata["totalDurationWeeks"] = round(total_duration / 7.0, 2)
-        metadata["totalDurationDisplay"] = _format_duration_days(total_duration)
-    else:
-        metadata["totalDurationDays"] = 0.0
-        metadata["totalDurationWeeks"] = 0.0
-        metadata["totalDurationDisplay"] = "0d"
-
-    metadata["durationColumn"] = calc_header
-    metadata["clearedParentDurations"] = removed_parent_durations
-    metadata["normalizedDurations"] = normalized_count
-
-    return metadata
-
-
-def _apply_dependency_contribution(dependency_type: str, duration: float) -> float:
-    """Determine how a dependency contributes to its predecessor's duration."""
-
-    if duration <= 0:
-        return 0.0
-    if dependency_type in {"FF", "SS"}:
-        # Finish-to-finish and start-to-start usually overlap with their predecessors.
-        # Treat them as direct contributions without additional weighting for now.
-        return duration
-    return duration
-
-
-def _normalize_dependency_type(value: str) -> str:
-    text = _stringify(value).upper()
-    if text in {"FS", "FF", "SS", "SF"}:
-        return text
-    return "FS"
-
-
-def _dependency_type_for(values: List[str], index: int) -> str:
-    if not values:
-        return "FS"
-    if 0 <= index < len(values):
-        candidate = values[index]
-        return candidate if candidate else "FS"
-    return values[-1] if values[-1] else "FS"
-
-
-def _normalize_duration_value(value: object) -> Tuple[Optional[str], Optional[float], bool]:
-    original = _stringify(value)
-    if not original:
-        return None, None, False
-
-    stripped = original.strip()
-    changed = stripped != original
-    if stripped.endswith("?"):
-        stripped = stripped[:-1].strip()
-        changed = True
-
-    days = _parse_duration_to_days(stripped)
-    if days is not None:
-        formatted = _format_duration_days(days)
-        if formatted == original and not changed:
-            return formatted, days, False
-        return formatted, days, True
-
-    if changed:
-        return stripped, None, True
-    return None, None, False
-
-
-def _parse_duration_to_days(text: str) -> Optional[float]:
-    if not text:
-        return None
-    match = re.fullmatch(
-        r"(?i)\s*(\d+(?:\.\d+)?)\s*(d|day|days|w|week|weeks)?\s*",
-        text,
-    )
-    if not match:
-        return None
-    value = float(match.group(1))
-    unit = match.group(2).lower() if match.group(2) else "d"
-    if unit.startswith("w"):
-        value *= 7.0
-    return value
-
-
-def _format_duration_days(days: float) -> str:
-    if math.isclose(days, round(days), rel_tol=1e-9, abs_tol=1e-9):
-        return f"{int(round(days))}d"
-    text = f"{days:.2f}".rstrip("0").rstrip(".")
-    return f"{text}d"
-
-
-def _duration_close(first: float, second: float, tolerance: float = 0.01) -> bool:
-    return math.isclose(first, second, rel_tol=0.0, abs_tol=tolerance)
 
 
 # ---------------------------------------------------------------------------
