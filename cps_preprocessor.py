@@ -39,6 +39,7 @@ class PreprocessMetadata:
 def preprocess_excel(data: bytes) -> Tuple[List[Dict[str, str]], Dict[str, int | bool]]:
     """Parse and clean an uploaded Excel workbook."""
     workbook = _read_workbook(data)
+    _ensure_schedule_compatibility(workbook)
     _, dependency_metadata = _fill_missing_dependencies(workbook)
     metadata = dependency_metadata.to_dict()
     return workbook.rows, metadata
@@ -64,6 +65,93 @@ def _read_workbook(data: bytes) -> WorkbookData:
         raise ValueError("The uploaded workbook does not contain any rows.")
 
     return WorkbookData(headers=headers, rows=rows, header_lookup=header_lookup, indent_by_row=indent_by_row)
+
+
+def _ensure_schedule_compatibility(workbook: WorkbookData) -> None:
+    """Augment workbooks exported from the scheduler with legacy dependency fields."""
+
+    normalized_header = _resolve_header(
+        workbook.header_lookup,
+        ("normalized predecessors", "normalized predecessor"),
+    )
+    if not normalized_header:
+        return
+
+    predecessor_fields = _ensure_headers(
+        workbook,
+        ("Predecessors IDs", "Predecessor IDs", "Predecessors"),
+    )
+    dependency_fields = _ensure_headers(
+        workbook,
+        ("Dependency Type", "Dependency Types"),
+    )
+
+    for row in workbook.rows:
+        ids, types = _parse_normalized_dependencies(row.get(normalized_header, ""))
+        if not ids:
+            continue
+        joined_ids = ", ".join(ids)
+        joined_types = ", ".join(types)
+
+        for field in predecessor_fields:
+            if not _stringify(row.get(field, "")):
+                row[field] = joined_ids
+
+        if joined_types:
+            for field in dependency_fields:
+                if not _stringify(row.get(field, "")):
+                    row[field] = joined_types
+
+
+def _register_header(workbook: WorkbookData, header: str) -> str:
+    if header not in workbook.headers:
+        workbook.headers.append(header)
+    workbook.header_lookup[_normalize_key(header)] = header
+    return header
+
+
+def _ensure_headers(workbook: WorkbookData, names: Iterable[str]) -> List[str]:
+    resolved: List[str] = []
+    for name in names:
+        existing = _resolve_header(workbook.header_lookup, (name,))
+        resolved.append(existing or _register_header(workbook, name))
+    # Preserve insertion order while removing duplicates
+    return list(dict.fromkeys(resolved))
+
+
+def _parse_normalized_dependencies(value: object) -> Tuple[List[str], List[str]]:
+    text = _stringify(value)
+    if not text:
+        return [], []
+
+    entries = re.split(r"[,;\n]", text)
+    ids: List[str] = []
+    types: List[str] = []
+    seen: set[str] = set()
+
+    for entry in entries:
+        candidate = entry.strip()
+        if not candidate:
+            continue
+
+        type_match = re.search(r"(FS|SS|FF|SF)", candidate, re.IGNORECASE)
+        if type_match:
+            id_part = candidate[: type_match.start()]
+            dependency_type = type_match.group().upper()
+        else:
+            id_part = candidate
+            dependency_type = "FS"
+
+        predecessor_id = _stringify(id_part)
+        predecessor_id = re.sub(r"[^A-Za-z0-9_.-]+", "", predecessor_id)
+        if not predecessor_id or predecessor_id in seen:
+            continue
+
+        seen.add(predecessor_id)
+        ids.append(predecessor_id)
+        types.append(dependency_type)
+
+    return ids, types
 
 
 def _parse_sheet_stream(
