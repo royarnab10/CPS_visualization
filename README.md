@@ -9,6 +9,7 @@ An interactive, browser-based tool for validating complex critical path schedule
 - **Interactive dependency graph** – Visualize predecessor/successor relationships, auto-include nearby context, and highlight task metadata.
 - **Dependency typing** – Add a `Dependency Type` column (FS/SS/SF/FF) to distinguish relationships; otherwise Finish-to-Start (FS) is assumed.
 - **Stakeholder-friendly UI** – Styled for projection or screen sharing; no coding experience required.
+- **Download cleaned workbook** – Retrieve the Excel file produced by the preprocessing service for archival or further review.
 
 A lightweight sample dataset is included in [`webapp/data/sample_schedule.json`](webapp/data/sample_schedule.json) and the repository ships with the stakeholder workbook `CPS_Rules_comm_LPA_Readiness.xlsx` for real-world testing.
 
