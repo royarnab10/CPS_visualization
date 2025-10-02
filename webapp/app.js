@@ -17,8 +17,29 @@ let showFullGraph = false;
 let selectedTask = null;
 let isProcessingUpload = false;
 
-const BASE_DURATION_HEADERS = ['Base Duration', 'Duration', 'Duration (days)', 'Task Duration'];
-const CALCULATED_DURATION_HEADERS = ['Calculated Duration (days)', 'Calculated Duration'];
+const BASE_DURATION_HEADERS = ['Base Duration', 'Duration', 'Duration (days)', 'Task Duration', 'BaseDuration'];
+const CALCULATED_DURATION_HEADERS = [
+  'Calculated Duration (days)',
+  'Calculated Duration',
+  'Effective Duration',
+  'EffectiveDuration'
+];
+const SCHEDULE_BASE_DURATION_HEADERS = ['BaseDurationHours', 'Base Duration Hours', 'Base Duration (h)'];
+const SCHEDULE_EFFECTIVE_DURATION_HEADERS = [
+  'EffectiveDurationHours',
+  'Effective Duration Hours',
+  'Schedule Duration Hours'
+];
+const SCHEDULE_ES_HEADERS = ['ES (h)', 'ES Hours', 'ES'];
+const SCHEDULE_EF_HEADERS = ['EF (h)', 'EF Hours', 'EF'];
+const SCHEDULE_LS_HEADERS = ['LS (h)', 'LS Hours', 'LS'];
+const SCHEDULE_LF_HEADERS = ['LF (h)', 'LF Hours', 'LF'];
+const SCHEDULE_TOTAL_SLACK_HEADERS = ['TotalSlack (h)', 'Total Slack (h)', 'TotalSlackHours', 'Total Slack'];
+const SCHEDULE_FREE_SLACK_HEADERS = ['FreeSlack (h)', 'Free Slack (h)', 'FreeSlackHours', 'Free Slack'];
+const SCHEDULE_CRITICAL_HEADERS = ['IsCritical', 'Critical', 'On Critical Path'];
+const SCHEDULE_START_HEADERS = ['StartDate', 'Start Date', 'Start'];
+const SCHEDULE_FINISH_HEADERS = ['FinishDate', 'Finish Date', 'Finish'];
+const HOURS_PER_DAY = 8;
 
 const dom = {
   fileInput: document.getElementById('file-input'),
@@ -110,6 +131,36 @@ async function preprocessWorkbook(file) {
   return response.json();
 }
 
+function extractScheduleInfo(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return { records: [], metadata: null };
+  }
+
+  const schedule = payload.schedule || payload.scheduleRecords || payload.scheduleResult || null;
+
+  if (Array.isArray(schedule)) {
+    return { records: schedule, metadata: payload.scheduleMetadata || null };
+  }
+
+  if (schedule && Array.isArray(schedule.records)) {
+    return { records: schedule.records, metadata: schedule.metadata || null };
+  }
+
+  if (schedule && Array.isArray(schedule.rows)) {
+    return { records: schedule.rows, metadata: schedule.metadata || null };
+  }
+
+  if (schedule && Array.isArray(schedule.tasks)) {
+    return { records: schedule.tasks, metadata: schedule.metadata || null };
+  }
+
+  if (Array.isArray(payload.scheduleRows)) {
+    return { records: payload.scheduleRows, metadata: payload.scheduleMetadata || null };
+  }
+
+  return { records: [], metadata: payload.scheduleMetadata || null };
+}
+
 async function handleFileInput(event) {
   const file = event.target.files?.[0];
   if (!file) return;
@@ -118,12 +169,15 @@ async function handleFileInput(event) {
     setProcessingState(`Cleaning ${file.name}…`, true);
     const payload = await preprocessWorkbook(file);
     const records = payload.records || payload.rows || [];
+    const scheduleInfo = extractScheduleInfo(payload);
     if (!Array.isArray(records) || records.length === 0) {
       throw new Error('The preprocessing pipeline returned no rows.');
     }
     prepareDataset(records, file.name, {
       cleaned: Boolean(payload.metadata?.cleaned),
-      metadata: payload.metadata || null
+      metadata: payload.metadata || null,
+      schedule: scheduleInfo.records,
+      scheduleMetadata: scheduleInfo.metadata
     });
   } catch (error) {
     console.error('Failed to preprocess workbook', error);
@@ -148,7 +202,12 @@ function prepareDataset(records, label, options = {}) {
     return;
   }
 
-  const tasks = records.map(normalizeRecord).filter(Boolean);
+  const scheduleRecords = Array.isArray(options.schedule) ? options.schedule : [];
+  const normalizedSchedule = scheduleRecords.map(normalizeScheduleRow).filter(Boolean);
+  const scheduleById = new Map(normalizedSchedule.map((entry) => [entry.id, entry]));
+  const scheduleSummary = computeScheduleSummary(normalizedSchedule, options.scheduleMetadata || null);
+
+  const tasks = records.map((record) => normalizeRecord(record, scheduleById)).filter(Boolean);
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   const dependencies = buildDependencies(tasks);
   const levels = Array.from(new Set(tasks.map((t) => t.level))).sort((a, b) => a - b);
@@ -168,7 +227,10 @@ function prepareDataset(records, label, options = {}) {
     modified: false,
     preprocessed: Boolean(options.cleaned),
     rawRows,
-    metadata: options.metadata || null
+    metadata: options.metadata || null,
+    schedule: normalizedSchedule,
+    scheduleSummary,
+    scheduleById
   };
 
   if (dom.dependencyPanel) {
@@ -190,7 +252,7 @@ function prepareDataset(records, label, options = {}) {
   updateDownloadButton();
 }
 
-function normalizeRecord(record) {
+function normalizeRecord(record, scheduleById = null) {
   const mapped = {};
   for (const [key, value] of Object.entries(record)) {
     if (!key) continue;
@@ -203,6 +265,7 @@ function normalizeRecord(record) {
     return null;
   }
 
+  const scheduleEntry = scheduleById ? scheduleById.get(String(id)) : null;
   const levelLabel = mapped['Task Level'] || mapped['Level'] || '';
   const level = parseLevel(levelLabel);
   const predecessorsRaw = mapped['Predecessors IDs'] || mapped['Predecessor IDs'] || mapped['Predecessors'] || '';
@@ -211,8 +274,37 @@ function normalizeRecord(record) {
 
   const baseDurationValue = readFirstAvailable(mapped, BASE_DURATION_HEADERS);
   const calculatedDurationValue = readFirstAvailable(mapped, CALCULATED_DURATION_HEADERS);
+  const scheduleBaseValue = readFirstAvailable(mapped, SCHEDULE_BASE_DURATION_HEADERS);
+  const scheduleEffectiveValue = readFirstAvailable(mapped, SCHEDULE_EFFECTIVE_DURATION_HEADERS);
+
   const baseDuration = parseDurationValue(baseDurationValue);
   const calculatedDuration = parseDurationValue(calculatedDurationValue);
+
+  const scheduleBase = scheduleEntry?.baseDurationHours ?? parseHoursValue(scheduleBaseValue);
+  const scheduleEffective = scheduleEntry?.effectiveDurationHours ?? parseHoursValue(scheduleEffectiveValue);
+
+  let baseDetail = '';
+  let calculatedDetail = '';
+
+  if (typeof scheduleBase === 'number' && !Number.isNaN(scheduleBase)) {
+    const derived = describeDurationFromHours(scheduleBase);
+    if (derived) {
+      baseDuration.display = derived.display;
+      baseDuration.days = derived.days;
+      baseDuration.hasValue = true;
+      baseDetail = `Schedule base duration · ${derived.detail}`;
+    }
+  }
+
+  if (typeof scheduleEffective === 'number' && !Number.isNaN(scheduleEffective)) {
+    const derived = describeDurationFromHours(scheduleEffective);
+    if (derived) {
+      calculatedDuration.display = derived.display;
+      calculatedDuration.days = derived.days;
+      calculatedDuration.hasValue = true;
+      calculatedDetail = `Effective CPM duration · ${derived.detail}`;
+    }
+  }
 
   return {
     id: String(id),
@@ -230,11 +322,243 @@ function normalizeRecord(record) {
     baseDurationDisplay: baseDuration.display,
     baseDurationDays: baseDuration.days,
     hasBaseDuration: baseDuration.hasValue,
+    baseDurationDetail: baseDetail,
     calculatedDurationDisplay: calculatedDuration.display,
     calculatedDurationDays: calculatedDuration.days,
     hasCalculatedDuration: calculatedDuration.hasValue,
+    calculatedDurationDetail: calculatedDetail,
+    raw: mapped,
+    schedule: scheduleEntry || buildScheduleFallback(scheduleBase, scheduleEffective, record)
+  };
+}
+
+function normalizeScheduleRow(record) {
+  if (!record || typeof record !== 'object') return null;
+
+  const mapped = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (!key) continue;
+    mapped[key.trim()] = typeof value === 'string' ? value.trim() : value;
+  }
+
+  const id = mapped['TaskId'] || mapped['Task ID'] || mapped['ID'];
+  if (!id) {
+    return null;
+  }
+
+  const baseHours = parseHoursValue(readFirstAvailable(mapped, SCHEDULE_BASE_DURATION_HEADERS));
+  const effectiveHours = parseHoursValue(readFirstAvailable(mapped, SCHEDULE_EFFECTIVE_DURATION_HEADERS));
+  const esHours = parseHoursValue(readFirstAvailable(mapped, SCHEDULE_ES_HEADERS));
+  const efHours = parseHoursValue(readFirstAvailable(mapped, SCHEDULE_EF_HEADERS));
+  const lsHours = parseHoursValue(readFirstAvailable(mapped, SCHEDULE_LS_HEADERS));
+  const lfHours = parseHoursValue(readFirstAvailable(mapped, SCHEDULE_LF_HEADERS));
+  const totalSlackHours = parseHoursValue(readFirstAvailable(mapped, SCHEDULE_TOTAL_SLACK_HEADERS));
+  const freeSlackHours = parseHoursValue(readFirstAvailable(mapped, SCHEDULE_FREE_SLACK_HEADERS));
+  const startRaw = readFirstAvailable(mapped, SCHEDULE_START_HEADERS);
+  const finishRaw = readFirstAvailable(mapped, SCHEDULE_FINISH_HEADERS);
+  const startDate = parseDateValue(startRaw);
+  const finishDate = parseDateValue(finishRaw);
+  const startDisplay = formatScheduleDate(startDate, startRaw);
+  const finishDisplay = formatScheduleDate(finishDate, finishRaw);
+  const isCritical = normalizeBoolean(readFirstAvailable(mapped, SCHEDULE_CRITICAL_HEADERS));
+
+  return {
+    id: String(id),
+    baseDurationHours: baseHours,
+    effectiveDurationHours: effectiveHours,
+    esHours,
+    efHours,
+    lsHours,
+    lfHours,
+    totalSlackHours,
+    freeSlackHours,
+    isCritical,
+    startDate,
+    finishDate,
+    startDateDisplay: startDisplay,
+    finishDateDisplay: finishDisplay,
+    startDateRaw: startRaw || '',
+    finishDateRaw: finishRaw || '',
     raw: mapped
   };
+}
+
+function buildScheduleFallback(baseHours, effectiveHours, record) {
+  const hasScheduleData =
+    (typeof baseHours === 'number' && !Number.isNaN(baseHours)) ||
+    (typeof effectiveHours === 'number' && !Number.isNaN(effectiveHours));
+  if (hasScheduleData) {
+    return normalizeScheduleRow(record) || {
+      id: record?.TaskId || record?.['Task ID'] || null,
+      baseDurationHours: baseHours ?? null,
+      effectiveDurationHours: effectiveHours ?? null
+    };
+  }
+  return null;
+}
+
+function parseHoursValue(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  const normalized = text.replace(/\s+/g, '').toLowerCase();
+  const simple = Number(normalized);
+  if (!Number.isNaN(simple)) {
+    return simple;
+  }
+
+  const match = normalized.match(/^(-?\d+(?:\.\d+)?)(h|d|w|mo)?$/);
+  if (!match) {
+    return null;
+  }
+  const magnitude = Number(match[1]);
+  if (Number.isNaN(magnitude)) {
+    return null;
+  }
+  const unit = match[2] || 'h';
+  if (unit === 'h') return magnitude;
+  if (unit === 'd') return magnitude * HOURS_PER_DAY;
+  if (unit === 'w') return magnitude * HOURS_PER_DAY * 5;
+  if (unit === 'mo') return magnitude * HOURS_PER_DAY * 20;
+  return null;
+}
+
+function hoursToDays(hours) {
+  if (typeof hours !== 'number' || Number.isNaN(hours)) return null;
+  return hours / HOURS_PER_DAY;
+}
+
+function describeDurationFromHours(hours) {
+  if (typeof hours !== 'number' || Number.isNaN(hours)) return null;
+  const days = hoursToDays(hours);
+  const display = typeof days === 'number' ? formatDurationLabel(days) : '';
+  return {
+    days,
+    display,
+    detail: `${formatNumber(days)} days (${formatNumber(hours)} hours)`
+  };
+}
+
+function formatHoursDetail(hours) {
+  if (typeof hours !== 'number' || Number.isNaN(hours)) return '';
+  const days = hoursToDays(hours);
+  if (typeof days === 'number' && !Number.isNaN(days)) {
+    return `${formatNumber(days)} days (${formatNumber(hours)} hours)`;
+  }
+  return `${formatNumber(hours)} hours`;
+}
+
+function parseDateValue(value) {
+  if (!value) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return new Date(value.getTime());
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed;
+}
+
+function formatScheduleDate(date, fallback = '') {
+  if (date instanceof Date && !Number.isNaN(date.getTime())) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}`;
+  }
+  if (fallback && typeof fallback === 'string') {
+    return fallback.trim();
+  }
+  return '';
+}
+
+function computeScheduleSummary(entries, metadata = null) {
+  if (!entries || entries.length === 0) {
+    return metadata || null;
+  }
+
+  let minStart = null;
+  let maxFinish = null;
+  let projectStartDate = null;
+  let projectFinishDate = null;
+
+  const metadataStart = metadata?.projectStartDate
+    ? parseDateValue(metadata.projectStartDate)
+    : metadata?.projectStart
+    ? parseDateValue(metadata.projectStart)
+    : null;
+  const metadataFinish = metadata?.projectFinishDate
+    ? parseDateValue(metadata.projectFinishDate)
+    : metadata?.projectFinish
+    ? parseDateValue(metadata.projectFinish)
+    : null;
+
+  entries.forEach((entry) => {
+    if (typeof entry.esHours === 'number' && !Number.isNaN(entry.esHours)) {
+      minStart = minStart === null ? entry.esHours : Math.min(minStart, entry.esHours);
+    }
+    if (typeof entry.efHours === 'number' && !Number.isNaN(entry.efHours)) {
+      maxFinish = maxFinish === null ? entry.efHours : Math.max(maxFinish, entry.efHours);
+    }
+    if (entry.startDate instanceof Date && !Number.isNaN(entry.startDate.getTime())) {
+      if (!projectStartDate || entry.startDate < projectStartDate) {
+        projectStartDate = entry.startDate;
+      }
+    }
+    if (entry.finishDate instanceof Date && !Number.isNaN(entry.finishDate.getTime())) {
+      if (!projectFinishDate || entry.finishDate > projectFinishDate) {
+        projectFinishDate = entry.finishDate;
+      }
+    }
+  });
+
+  const totalHours = maxFinish !== null ? maxFinish - (minStart || 0) : null;
+  const totalDays = totalHours !== null ? hoursToDays(totalHours) : null;
+
+  const metadataHours =
+    typeof metadata?.totalDurationHours === 'number' && !Number.isNaN(metadata.totalDurationHours)
+      ? metadata.totalDurationHours
+      : null;
+  const metadataDays =
+    typeof metadata?.totalDurationDays === 'number' && !Number.isNaN(metadata.totalDurationDays)
+      ? metadata.totalDurationDays
+      : metadataHours !== null
+      ? hoursToDays(metadataHours)
+      : null;
+  const totalHoursValue = metadataHours ?? totalHours;
+  const totalDaysValue = metadataDays ?? totalDays;
+
+  const startDateValue = metadataStart || projectStartDate;
+  const finishDateValue = metadataFinish || projectFinishDate;
+
+  const summary = {
+    totalDurationHours: totalHoursValue,
+    totalDurationDays: totalDaysValue,
+    totalDurationDisplay:
+      (metadata?.totalDurationDisplay && metadata.totalDurationDisplay.trim()) ||
+      (totalDaysValue !== null && !Number.isNaN(totalDaysValue) ? formatDurationLabel(totalDaysValue) : ''),
+    earliestStartHours: minStart,
+    latestFinishHours: maxFinish,
+    projectStartDate: startDateValue,
+    projectFinishDate: finishDateValue,
+    projectStartDisplay:
+      (metadata?.projectStartDisplay && metadata.projectStartDisplay.trim()) ||
+      formatScheduleDate(startDateValue, metadata?.projectStart || metadata?.projectStartDate || ''),
+    projectFinishDisplay:
+      (metadata?.projectFinishDisplay && metadata.projectFinishDisplay.trim()) ||
+      formatScheduleDate(finishDateValue, metadata?.projectFinish || metadata?.projectFinishDate || ''),
+    metadata: metadata || null
+  };
+
+  return summary;
 }
 
 function parseLevel(label) {
@@ -368,7 +692,17 @@ function buildDurationSummaryForTask(task, options = {}) {
     task.calculatedDurationDisplay,
     hasCalculated
   );
+  if (task.calculatedDurationDetail) {
+    calcInfo.detail = calcInfo.detail
+      ? `${calcInfo.detail} · ${task.calculatedDurationDetail}`
+      : task.calculatedDurationDetail;
+  }
   const baseInfo = describeSingleDuration(task.baseDurationDays, task.baseDurationDisplay, hasBase);
+  if (task.baseDurationDetail) {
+    baseInfo.detail = baseInfo.detail
+      ? `${baseInfo.detail} · ${task.baseDurationDetail}`
+      : task.baseDurationDetail;
+  }
 
   if (hasCalculated && calcInfo.display) {
     const detailParts = [];
@@ -391,6 +725,7 @@ function buildDurationSummaryForTask(task, options = {}) {
         detailParts.push(includeLabel ? `Base for ${label}` : 'Base duration');
       }
     }
+    appendScheduleDetails(detailParts, task.schedule);
     return {
       display: calcInfo.display,
       detail: detailParts.join(' · ')
@@ -403,21 +738,64 @@ function buildDurationSummaryForTask(task, options = {}) {
     if (baseInfo.detail) {
       detailParts.push(baseInfo.detail);
     }
+    appendScheduleDetails(detailParts, task.schedule);
     return {
       display: baseInfo.display,
       detail: detailParts.join(' · ')
     };
   }
 
+  const fallbackDetails = [];
+  if (calcInfo.detail) fallbackDetails.push(calcInfo.detail);
+  if (baseInfo.detail) fallbackDetails.push(baseInfo.detail);
+  appendScheduleDetails(fallbackDetails, task.schedule);
+
   return {
     display: '—',
-    detail: includeLabel
-      ? `No duration data recorded for ${label}.`
-      : 'No duration data recorded for this task.'
+    detail:
+      fallbackDetails.length > 0
+        ? fallbackDetails.join(' · ')
+        : includeLabel
+        ? `No duration data recorded for ${label}.`
+        : 'No duration data recorded for this task.'
   };
 }
 
+function appendScheduleDetails(parts, schedule) {
+  if (!Array.isArray(parts) || !schedule) return;
+  const detailSegments = [];
+  if (schedule.startDateDisplay) {
+    detailSegments.push(`Start ${schedule.startDateDisplay}`);
+  } else if (schedule.startDateRaw) {
+    detailSegments.push(`Start ${schedule.startDateRaw}`);
+  }
+  if (schedule.finishDateDisplay) {
+    detailSegments.push(`Finish ${schedule.finishDateDisplay}`);
+  } else if (schedule.finishDateRaw) {
+    detailSegments.push(`Finish ${schedule.finishDateRaw}`);
+  }
+  if (typeof schedule.totalSlackHours === 'number' && !Number.isNaN(schedule.totalSlackHours)) {
+    detailSegments.push(`Total slack ${formatHoursDetail(schedule.totalSlackHours)}`);
+  }
+  if (typeof schedule.freeSlackHours === 'number' && !Number.isNaN(schedule.freeSlackHours)) {
+    detailSegments.push(`Free slack ${formatHoursDetail(schedule.freeSlackHours)}`);
+  }
+  if (schedule.isCritical) {
+    detailSegments.push('Critical path task');
+  }
+  if (detailSegments.length > 0) {
+    parts.push(detailSegments.join(' · '));
+  }
+}
+
 function computeScheduleTotalDays() {
+  if (
+    dataset?.scheduleSummary &&
+    typeof dataset.scheduleSummary.totalDurationDays === 'number' &&
+    !Number.isNaN(dataset.scheduleSummary.totalDurationDays)
+  ) {
+    return dataset.scheduleSummary.totalDurationDays;
+  }
   if (!dataset || !dataset.tasks || dataset.tasks.length === 0) {
     return null;
   }
@@ -526,6 +904,7 @@ function renderDurationSummary() {
     return;
   }
 
+  const scheduleSummary = dataset.scheduleSummary || dataset.metadata?.scheduleSummary || null;
   const hasDurationData = dataset.tasks.some(
     (task) =>
       typeof task.calculatedDurationDays === 'number' ||
@@ -535,7 +914,9 @@ function renderDurationSummary() {
   );
 
   let totalDays =
-    typeof dataset.metadata?.totalDurationDays === 'number'
+    typeof scheduleSummary?.totalDurationDays === 'number'
+      ? scheduleSummary.totalDurationDays
+      : typeof dataset.metadata?.totalDurationDays === 'number'
       ? dataset.metadata.totalDurationDays
       : null;
 
@@ -544,12 +925,28 @@ function renderDurationSummary() {
   }
 
   const totalDisplay =
+    (scheduleSummary?.totalDurationDisplay && scheduleSummary.totalDurationDisplay.trim()) ||
     (dataset.metadata?.totalDurationDisplay && dataset.metadata.totalDurationDisplay.trim()) ||
     (totalDays !== null && !Number.isNaN(totalDays) ? formatDurationLabel(totalDays) : '—');
 
   dom.totalDurationDisplay.textContent = totalDisplay || '—';
   if (totalDays !== null && !Number.isNaN(totalDays)) {
-    dom.totalDurationDetail.textContent = `${formatNumber(totalDays)} days · ${formatWeeksLabel(totalDays)}`;
+    const summaryParts = [`${formatNumber(totalDays)} days · ${formatWeeksLabel(totalDays)}`];
+    const startDisplay = scheduleSummary?.projectStartDisplay;
+    const finishDisplay = scheduleSummary?.projectFinishDisplay;
+    if ((startDisplay && startDisplay.trim()) || (finishDisplay && finishDisplay.trim())) {
+      const windowParts = [];
+      if (startDisplay && startDisplay.trim()) {
+        windowParts.push(`Start ${startDisplay.trim()}`);
+      }
+      if (finishDisplay && finishDisplay.trim()) {
+        windowParts.push(`Finish ${finishDisplay.trim()}`);
+      }
+      if (windowParts.length > 0) {
+        summaryParts.push(windowParts.join(' · '));
+      }
+    }
+    dom.totalDurationDetail.textContent = summaryParts.join(' · ');
   } else if (hasDurationData) {
     dom.totalDurationDetail.textContent = 'Unable to compute a rolled-up total from the provided durations.';
   } else {
@@ -1336,6 +1733,64 @@ function buildTaskEditForm(task) {
   const rolledDetail = rolledInfo.detail || 'No rolled-up duration available.';
   const baseDisplay = baseInfo.display || '—';
   const baseDetail = baseInfo.detail || 'No base duration recorded.';
+  const schedule = task.schedule || null;
+  const startText = schedule?.startDateDisplay || schedule?.startDateRaw || '';
+  const finishText = schedule?.finishDateDisplay || schedule?.finishDateRaw || '';
+  const totalSlackText =
+    typeof schedule?.totalSlackHours === 'number' && !Number.isNaN(schedule.totalSlackHours)
+      ? formatHoursDetail(schedule.totalSlackHours)
+      : '';
+  const freeSlackText =
+    typeof schedule?.freeSlackHours === 'number' && !Number.isNaN(schedule.freeSlackHours)
+      ? formatHoursDetail(schedule.freeSlackHours)
+      : '';
+  const startDetail = schedule?.startDateDisplay || schedule?.startDateRaw ? 'Earliest schedule start' : '';
+  const finishDetail = schedule?.finishDateDisplay || schedule?.finishDateRaw ? 'Projected finish' : '';
+  const totalSlackDetail = totalSlackText ? 'Total slack relative to successors' : '';
+  const freeSlackDetail = freeSlackText ? 'Free slack before impacting successors' : '';
+  const criticalDetail = schedule
+    ? schedule.isCritical
+      ? 'This task is on the critical path.'
+      : 'Not currently on the critical path.'
+    : '';
+  const hasScheduleDetails = Boolean(
+    (startText && startText.trim()) ||
+      (finishText && finishText.trim()) ||
+      totalSlackText ||
+      freeSlackText ||
+      schedule?.isCritical
+  );
+  const scheduleBlock = schedule && hasScheduleDetails
+    ? `
+    <div class="task-schedule-overview">
+      <div class="schedule-card">
+        <span class="schedule-label">Start</span>
+        <strong>${escapeHtml(startText || '—')}</strong>
+        <small>${escapeHtml(startDetail || '')}</small>
+      </div>
+      <div class="schedule-card">
+        <span class="schedule-label">Finish</span>
+        <strong>${escapeHtml(finishText || '—')}</strong>
+        <small>${escapeHtml(finishDetail || '')}</small>
+      </div>
+      <div class="schedule-card">
+        <span class="schedule-label">Total slack</span>
+        <strong>${escapeHtml(totalSlackText || '—')}</strong>
+        <small>${escapeHtml(totalSlackDetail || '')}</small>
+      </div>
+      <div class="schedule-card">
+        <span class="schedule-label">Free slack</span>
+        <strong>${escapeHtml(freeSlackText || '—')}</strong>
+        <small>${escapeHtml(freeSlackDetail || '')}</small>
+      </div>
+      <div class="schedule-card">
+        <span class="schedule-label">Critical path</span>
+        <strong>${schedule.isCritical ? 'Yes' : 'No'}</strong>
+        <small>${escapeHtml(criticalDetail || '')}</small>
+      </div>
+    </div>
+  `
+    : '';
 
   form.innerHTML = `
     <div class="task-form-header">
@@ -1362,6 +1817,7 @@ function buildTaskEditForm(task) {
         <small>${escapeHtml(baseDetail)}</small>
       </div>
     </div>
+    ${scheduleBlock}
     <div class="task-form-grid">
       <label class="task-field">
         <span>Task name</span>

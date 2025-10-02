@@ -542,6 +542,38 @@ button:disabled:hover {
   color: rgba(15, 23, 42, 0.65);
 }
 
+.task-schedule-overview {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  background: rgba(148, 163, 184, 0.16);
+  border-radius: 1rem;
+  padding: 0.9rem 1.1rem;
+}
+
+.schedule-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.schedule-card .schedule-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(15, 23, 42, 0.55);
+}
+
+.schedule-card strong {
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.schedule-card small {
+  font-size: 0.76rem;
+  color: rgba(15, 23, 42, 0.6);
+}
+
 .task-form-header h3 {
   margin: 0;
   font-size: 1rem;
