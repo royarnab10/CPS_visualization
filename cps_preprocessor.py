@@ -8,7 +8,8 @@ import sys
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 from xml.etree import ElementTree as ET
-from zipfile import ZipFile
+from xml.sax.saxutils import escape
+from zipfile import ZIP_DEFLATED, ZipFile
 
 
 @dataclass
@@ -36,13 +37,41 @@ class PreprocessMetadata:
         }
 
 
-def preprocess_excel(data: bytes) -> Tuple[List[Dict[str, str]], Dict[str, int | bool]]:
-    """Parse and clean an uploaded Excel workbook."""
+@dataclass
+class PreprocessResult:
+    """Structured response returned by :func:`preprocess_excel_with_workbook`."""
+
+    workbook: WorkbookData
+    rows: List[Dict[str, str]]
+    metadata: Dict[str, int | bool]
+    excel_bytes: bytes
+
+
+def preprocess_excel_with_workbook(data: bytes) -> PreprocessResult:
+    """Parse, clean, and serialize an uploaded Excel workbook."""
+
     workbook = _read_workbook(data)
     _ensure_schedule_compatibility(workbook)
     _, dependency_metadata = _fill_missing_dependencies(workbook)
     metadata = dependency_metadata.to_dict()
-    return workbook.rows, metadata
+    excel_bytes = _serialize_workbook(workbook)
+    return PreprocessResult(
+        workbook=workbook,
+        rows=workbook.rows,
+        metadata=metadata,
+        excel_bytes=excel_bytes,
+    )
+
+
+def preprocess_excel(data: bytes) -> Tuple[List[Dict[str, str]], Dict[str, int | bool]]:
+    """Parse and clean an uploaded Excel workbook.
+
+    This shim preserves the legacy return signature for callers that only
+    require the JSON representation of the cleaned rows.
+    """
+
+    result = preprocess_excel_with_workbook(data)
+    return result.rows, result.metadata
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +514,136 @@ def _task_id_sort_key(task_id: object) -> Tuple[int, str]:
         except ValueError:
             pass
     return sys.maxsize, text
+
+
+# ---------------------------------------------------------------------------
+# Workbook serialization
+
+
+def _serialize_workbook(workbook: WorkbookData) -> bytes:
+    headers = _unique_headers(workbook.headers)
+    sheet_rows: List[str] = []
+
+    if headers:
+        sheet_rows.append(_build_row_xml(1, headers))
+
+    start_index = 2 if headers else 1
+    for index, row in enumerate(workbook.rows, start=start_index):
+        values = [_stringify(row.get(header, "")) for header in headers]
+        sheet_rows.append(_build_row_xml(index, values))
+
+    sheet_data = "".join(sheet_rows)
+    worksheet_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
+        f"<sheetData>{sheet_data}</sheetData>"
+        "</worksheet>"
+    )
+
+    workbook_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+        "<sheets><sheet name=\"Tasks\" sheetId=\"1\" r:id=\"rId1\"/></sheets>"
+        "</workbook>"
+    )
+
+    workbook_rels_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" "
+        "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" "
+        "Target=\"worksheets/sheet1.xml\"/>"
+        "<Relationship Id=\"rId2\" "
+        "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" "
+        "Target=\"styles.xml\"/>"
+        "</Relationships>"
+    )
+
+    package_rels_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" "
+        "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" "
+        "Target=\"xl/workbook.xml\"/>"
+        "</Relationships>"
+    )
+
+    styles_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
+        "<fonts count=\"1\"><font/></fonts>"
+        "<fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills>"
+        "<borders count=\"1\"><border/></borders>"
+        "<cellStyleXfs count=\"1\"><xf/></cellStyleXfs>"
+        "<cellXfs count=\"1\"><xf xfId=\"0\"/></cellXfs>"
+        "<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>"
+        "</styleSheet>"
+    )
+
+    content_types_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+        "<Default Extension=\"rels\" "
+        "ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+        "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+        "<Override PartName=\"/xl/workbook.xml\" "
+        "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"
+        "<Override PartName=\"/xl/worksheets/sheet1.xml\" "
+        "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
+        "<Override PartName=\"/xl/styles.xml\" "
+        "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>"
+        "</Types>"
+    )
+
+    stream = io.BytesIO()
+    with ZipFile(stream, "w", ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types_xml)
+        zf.writestr("_rels/.rels", package_rels_xml)
+        zf.writestr("xl/workbook.xml", workbook_xml)
+        zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
+        zf.writestr("xl/worksheets/sheet1.xml", worksheet_xml)
+        zf.writestr("xl/styles.xml", styles_xml)
+
+    return stream.getvalue()
+
+
+def _build_row_xml(row_number: int, values: List[str]) -> str:
+    cells: List[str] = []
+    for index, value in enumerate(values):
+        if value == "":
+            continue
+        column = _column_letter(index)
+        reference = f"{column}{row_number}"
+        escaped = escape(value, {"\n": "&#10;", "\r": "&#13;"})
+        cell = (
+            f"<c r=\"{reference}\" t=\"inlineStr\">"
+            f"<is><t>{escaped}</t></is>"
+            "</c>"
+        )
+        cells.append(cell)
+
+    return f"<row r=\"{row_number}\">{''.join(cells)}</row>"
+
+
+def _unique_headers(headers: Iterable[str]) -> List[str]:
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for header in headers:
+        if not header or header in seen:
+            continue
+        seen.add(header)
+        ordered.append(header)
+    return ordered
+
+
+def _column_letter(index: int) -> str:
+    index += 1
+    letters: List[str] = []
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        letters.append(chr(65 + remainder))
+    return "".join(reversed(letters))
 
 
 # ---------------------------------------------------------------------------

@@ -161,6 +161,46 @@ function extractScheduleInfo(payload) {
   return { records: [], metadata: payload.scheduleMetadata || null };
 }
 
+function parseExcelPayload(excelPayload, fallbackName = '') {
+  if (!excelPayload || typeof excelPayload !== 'object') {
+    return null;
+  }
+
+  const base64 =
+    typeof excelPayload.data === 'string'
+      ? excelPayload.data
+      : typeof excelPayload.base64 === 'string'
+        ? excelPayload.base64
+        : '';
+
+  if (!base64) {
+    return null;
+  }
+
+  const contentType =
+    typeof excelPayload.contentType === 'string' && excelPayload.contentType
+      ? excelPayload.contentType
+      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const filename =
+    typeof excelPayload.filename === 'string' && excelPayload.filename
+      ? excelPayload.filename
+      : buildProcessedFilename(fallbackName);
+
+  try {
+    const binary = atob(base64);
+    const length = binary.length;
+    const buffer = new Uint8Array(length);
+    for (let i = 0; i < length; i += 1) {
+      buffer[i] = binary.charCodeAt(i);
+    }
+    const blob = new Blob([buffer], { type: contentType });
+    return { filename, contentType, blob };
+  } catch (error) {
+    console.error('Unable to decode Excel payload', error);
+    return null;
+  }
+}
+
 async function handleFileInput(event) {
   const file = event.target.files?.[0];
   if (!file) return;
@@ -170,6 +210,7 @@ async function handleFileInput(event) {
     const payload = await preprocessWorkbook(file);
     const records = payload.records || payload.rows || [];
     const scheduleInfo = extractScheduleInfo(payload);
+    const processedExcel = parseExcelPayload(payload.excel, file.name);
     if (!Array.isArray(records) || records.length === 0) {
       throw new Error('The preprocessing pipeline returned no rows.');
     }
@@ -177,7 +218,8 @@ async function handleFileInput(event) {
       cleaned: Boolean(payload.metadata?.cleaned),
       metadata: payload.metadata || null,
       schedule: scheduleInfo.records,
-      scheduleMetadata: scheduleInfo.metadata
+      scheduleMetadata: scheduleInfo.metadata,
+      excelFile: processedExcel
     });
   } catch (error) {
     console.error('Failed to preprocess workbook', error);
@@ -193,7 +235,7 @@ async function handleFileInput(event) {
 async function loadSampleData() {
   const response = await fetch('data/sample_schedule.json');
   const records = await response.json();
-  prepareDataset(records, 'Sample schedule', { cleaned: false });
+  prepareDataset(records, 'Sample schedule', { cleaned: false, excelFile: null });
 }
 
 function prepareDataset(records, label, options = {}) {
@@ -202,6 +244,7 @@ function prepareDataset(records, label, options = {}) {
     return;
   }
 
+  const rawRows = Array.isArray(records) ? records.map((row) => ({ ...row })) : [];
   const scheduleRecords = Array.isArray(options.schedule) ? options.schedule : [];
   const fallbackScheduleEntries = rawRows.map((row) => normalizeScheduleRow(row)).filter(Boolean);
   const scheduleById = new Map(fallbackScheduleEntries.map((entry) => [entry.id, entry]));
@@ -224,7 +267,6 @@ function prepareDataset(records, label, options = {}) {
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   const dependencies = buildDependencies(tasks);
   const levels = Array.from(new Set(tasks.map((t) => t.level))).sort((a, b) => a - b);
-  const rawRows = Array.isArray(records) ? records.map((row) => ({ ...row })) : [];
 
   selectedTaskIds = new Set();
   hierarchySelections = new Map();
@@ -240,6 +282,7 @@ function prepareDataset(records, label, options = {}) {
     modified: false,
     preprocessed: Boolean(options.cleaned),
     rawRows,
+    processedExcel: options.excelFile || null,
     metadata: options.metadata || null,
     schedule: normalizedSchedule,
     scheduleSummary,
@@ -2517,6 +2560,7 @@ function afterDatasetMutation(actionDescription) {
   dataset.modified = true;
   dataset.preprocessed = false;
   dataset.rawRows = null;
+  dataset.processedExcel = null;
   refreshDatasetIndexes();
   cleanupSelections();
   rebuildSelectedTaskIds();
@@ -2560,12 +2604,17 @@ function cleanupSelections() {
 
 function updateDownloadButton() {
   if (!dom.downloadDataset) return;
+  const hasServerExcel = Boolean(dataset?.processedExcel);
   const hasRawRows = Boolean(dataset?.rawRows && dataset.rawRows.length);
   const hasTasks = Boolean(dataset?.tasks && dataset.tasks.length);
-  const hasData = hasRawRows || hasTasks;
+  const hasData = hasServerExcel || hasRawRows || hasTasks;
   dom.downloadDataset.disabled = !hasData || isProcessingUpload;
   if (!hasData) {
     dom.downloadDataset.textContent = 'Download processed Excel';
+    return;
+  }
+  if (hasServerExcel && !dataset?.modified) {
+    dom.downloadDataset.textContent = 'Download preprocessed Excel';
     return;
   }
   const showProcessedLabel = Boolean(!dataset?.modified && dataset?.preprocessed);
@@ -2574,6 +2623,11 @@ function updateDownloadButton() {
 
 function downloadCurrentWorkbook() {
   if (!dataset || (dom.downloadDataset && dom.downloadDataset.disabled)) return;
+  if (!dataset.modified && dataset.processedExcel?.blob) {
+    const filename = dataset.processedExcel.filename || generateDownloadFilename();
+    downloadBlob(dataset.processedExcel.blob, filename);
+    return;
+  }
   if (!dataset.modified && dataset.rawRows && dataset.rawRows.length) {
     exportRowsToExcel(dataset.rawRows);
     return;
@@ -2635,10 +2689,40 @@ function exportRowsToExcel(rows) {
   XLSX.writeFile(workbook, generateDownloadFilename());
 }
 
+function downloadBlob(blob, filename) {
+  if (!(blob instanceof Blob)) return;
+  const link = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  link.href = url;
+  link.download = filename || 'cps_preprocessed.xlsx';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 function generateDownloadFilename() {
+  if (!dataset?.modified && dataset?.processedExcel?.filename) {
+    return dataset.processedExcel.filename;
+  }
   const label = dataset?.label || 'schedule';
-  const safe = label.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
+  const safe = sanitizeLabel(label);
   return `${safe || 'schedule'}_edited.xlsx`;
+}
+
+function buildProcessedFilename(label) {
+  const baseName = typeof label === 'string' ? label : '';
+  const withoutExtension = baseName.replace(/\.[^.]+$/, '');
+  const fallback = withoutExtension || dataset?.label || 'schedule';
+  const safe = sanitizeLabel(fallback);
+  return `${safe || 'schedule'}_preprocessed.xlsx`;
+}
+
+function sanitizeLabel(label) {
+  return String(label || '')
+    .trim()
+    .replace(/[^a-z0-9]+/gi, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
 function escapeHtml(value) {
