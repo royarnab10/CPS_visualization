@@ -291,11 +291,17 @@ def _fill_missing_dependencies(workbook: WorkbookData) -> Tuple[List[Dict[str, s
         workbook.header_lookup, ("successors ids", "successor ids", "successors")
     )
 
+    if not predecessors_header:
+        predecessors_header = _register_header(workbook, "Predecessors IDs")
+    if not successors_header:
+        successors_header = _register_header(workbook, "Successors IDs")
+
     if not id_header or not name_header:
         raise ValueError("The workbook must include 'Task ID' and 'Task Name' columns.")
 
     metadata = PreprocessMetadata()
     stack: List[Dict[str, object]] = []
+    level_one_tasks: List[Dict[str, object]] = []
 
     for index, row in enumerate(workbook.rows):
         task_id = _stringify(row.get(id_header, ""))
@@ -329,18 +335,54 @@ def _fill_missing_dependencies(workbook: WorkbookData) -> Tuple[List[Dict[str, s
                         row[successors_header] = _join_ids(successors)
                         metadata.added_successors += 1
 
-        stack.append(
-            {
-                "id": task_id,
-                "indent": current_indent,
-                "level": level_number,
-                "row": row,
-                "predecessors": predecessors,
-                "successors": successors,
-            }
-        )
+        task_info = {
+            "id": task_id,
+            "indent": current_indent,
+            "level": level_number,
+            "row": row,
+            "predecessors": predecessors,
+            "successors": successors,
+        }
+        stack.append(task_info)
+
+        if level_number == 1:
+            level_one_tasks.append(task_info)
+
+    _link_level_one_tasks(level_one_tasks, predecessors_header, successors_header, metadata)
 
     return workbook.rows, metadata
+
+
+def _link_level_one_tasks(
+    tasks: List[Dict[str, object]],
+    predecessors_header: str,
+    successors_header: str,
+    metadata: PreprocessMetadata,
+) -> None:
+    if len(tasks) < 2:
+        return
+
+    sorted_tasks = sorted(tasks, key=lambda task: _task_id_sort_key(task["id"]))
+
+    for previous, current in zip(sorted_tasks, sorted_tasks[1:]):
+        previous_id = _stringify(previous["id"])
+        current_id = _stringify(current["id"])
+        if not previous_id or not current_id or previous_id == current_id:
+            continue
+
+        current_predecessors: List[str] = current["predecessors"]  # type: ignore[assignment]
+        if previous_id not in current_predecessors:
+            current_predecessors.append(previous_id)
+            current_row: Dict[str, str] = current["row"]  # type: ignore[assignment]
+            current_row[predecessors_header] = _join_ids(current_predecessors)
+            metadata.added_predecessors += 1
+
+        previous_successors: List[str] = previous["successors"]  # type: ignore[assignment]
+        if current_id not in previous_successors:
+            previous_successors.append(current_id)
+            previous_row: Dict[str, str] = previous["row"]  # type: ignore[assignment]
+            previous_row[successors_header] = _join_ids(previous_successors)
+            metadata.added_successors += 1
 
 
 def _is_valid_parent(child_level: Optional[int], parent_level: Optional[int]) -> bool:
@@ -428,6 +470,21 @@ def _parse_level(value: object) -> Optional[int]:
     if match:
         return int(match.group(1))
     return None
+
+
+def _task_id_sort_key(task_id: object) -> Tuple[int, str]:
+    text = _stringify(task_id)
+    if not text:
+        return sys.maxsize, ""
+    if text.isdigit():
+        return int(text), text
+    match = re.search(r"(\d+)", text)
+    if match:
+        try:
+            return int(match.group(1)), text
+        except ValueError:
+            pass
+    return sys.maxsize, text
 
 
 # ---------------------------------------------------------------------------
