@@ -203,11 +203,24 @@ function prepareDataset(records, label, options = {}) {
   }
 
   const scheduleRecords = Array.isArray(options.schedule) ? options.schedule : [];
-  const normalizedSchedule = scheduleRecords.map(normalizeScheduleRow).filter(Boolean);
-  const scheduleById = new Map(normalizedSchedule.map((entry) => [entry.id, entry]));
-  const scheduleSummary = computeScheduleSummary(normalizedSchedule, options.scheduleMetadata || null);
+  const fallbackScheduleEntries = rawRows.map((row) => normalizeScheduleRow(row)).filter(Boolean);
+  const scheduleById = new Map(fallbackScheduleEntries.map((entry) => [entry.id, entry]));
+
+  scheduleRecords.forEach((record) => {
+    const normalized = normalizeScheduleRow(record);
+    if (!normalized) return;
+    const existing = scheduleById.get(normalized.id);
+    scheduleById.set(normalized.id, existing ? { ...existing, ...normalized } : normalized);
+  });
+
+  const normalizedSchedule = Array.from(scheduleById.values());
 
   const tasks = records.map((record) => normalizeRecord(record, scheduleById)).filter(Boolean);
+  const scheduleSummary = computeScheduleSummary(
+    normalizedSchedule,
+    options.scheduleMetadata || null,
+    tasks
+  );
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   const dependencies = buildDependencies(tasks);
   const levels = Array.from(new Set(tasks.map((t) => t.level))).sort((a, b) => a - b);
@@ -268,9 +281,18 @@ function normalizeRecord(record, scheduleById = null) {
   const scheduleEntry = scheduleById ? scheduleById.get(String(id)) : null;
   const levelLabel = mapped['Task Level'] || mapped['Level'] || '';
   const level = parseLevel(levelLabel);
-  const predecessorsRaw = mapped['Predecessors IDs'] || mapped['Predecessor IDs'] || mapped['Predecessors'] || '';
+  const predecessorsRaw =
+    mapped['Predecessors IDs'] || mapped['Predecessor IDs'] || mapped['Predecessors'] || '';
   const successorsRaw = mapped['Successors IDs'] || mapped['Successor IDs'] || mapped['Successors'] || '';
   const dependencyTypeRaw = mapped['Dependency Type'] || mapped['Dependency Types'] || '';
+  const normalizedDependencyRaw =
+    mapped['Normalized Predecessors'] || mapped['Normalized Predecessor'] || '';
+  const normalizedDependencies = parseNormalizedDependencies(normalizedDependencyRaw);
+  const predecessorIds = splitIds(predecessorsRaw);
+  const successorIds = splitIds(successorsRaw);
+  const dependencyTypeList = splitIds(dependencyTypeRaw)
+    .map((type) => (type ? type.toUpperCase() : 'FS'))
+    .filter(Boolean);
 
   const baseDurationValue = readFirstAvailable(mapped, BASE_DURATION_HEADERS);
   const calculatedDurationValue = readFirstAvailable(mapped, CALCULATED_DURATION_HEADERS);
@@ -316,9 +338,10 @@ function normalizeRecord(record, scheduleById = null) {
     scope: mapped['SCOPE'] || mapped['Scope'] || 'Unscoped',
     learningPlan: normalizeBoolean(mapped['Learning_Plan'] ?? mapped['Learning Plan'] ?? ''),
     critical: normalizeBoolean(mapped['Critical'] ?? mapped['Is Critical'] ?? ''),
-    predecessors: splitIds(predecessorsRaw),
-    successors: splitIds(successorsRaw),
-    dependencyTypes: splitIds(dependencyTypeRaw).map((type) => (type ? type.toUpperCase() : 'FS')),
+    predecessors: predecessorIds.length > 0 ? predecessorIds : normalizedDependencies.ids,
+    successors: successorIds,
+    dependencyTypes:
+      dependencyTypeList.length > 0 ? dependencyTypeList : normalizedDependencies.types,
     baseDurationDisplay: baseDuration.display,
     baseDurationDays: baseDuration.days,
     hasBaseDuration: baseDuration.hasValue,
@@ -426,6 +449,16 @@ function parseHoursValue(value) {
   return null;
 }
 
+function normalizeScheduleHours(hours, fallbackDays) {
+  if (typeof hours === 'number' && !Number.isNaN(hours)) {
+    return hours;
+  }
+  if (typeof fallbackDays === 'number' && !Number.isNaN(fallbackDays)) {
+    return fallbackDays * HOURS_PER_DAY;
+  }
+  return null;
+}
+
 function hoursToDays(hours) {
   if (typeof hours !== 'number' || Number.isNaN(hours)) return null;
   return hours / HOURS_PER_DAY;
@@ -451,6 +484,23 @@ function formatHoursDetail(hours) {
   return `${formatNumber(hours)} hours`;
 }
 
+function describeAggregateDuration(label, hours) {
+  if (!label) return '';
+  if (typeof hours !== 'number' || Number.isNaN(hours)) return '';
+  const detail = formatHoursDetail(hours);
+  const days = hoursToDays(hours);
+  const segments = [];
+  if (detail) {
+    segments.push(`${label} ${detail}`);
+  } else {
+    segments.push(label);
+  }
+  if (typeof days === 'number' && !Number.isNaN(days)) {
+    segments.push(formatWeeksLabel(days));
+  }
+  return segments.join(' · ');
+}
+
 function parseDateValue(value) {
   if (!value) return null;
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
@@ -463,6 +513,17 @@ function parseDateValue(value) {
     return null;
   }
   return parsed;
+}
+
+function resolveFirstDate(candidates) {
+  if (!Array.isArray(candidates)) return null;
+  for (const candidate of candidates) {
+    const parsed = parseDateValue(candidate);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return null;
 }
 
 function formatScheduleDate(date, fallback = '') {
@@ -480,15 +541,9 @@ function formatScheduleDate(date, fallback = '') {
   return '';
 }
 
-function computeScheduleSummary(entries, metadata = null) {
-  if (!entries || entries.length === 0) {
-    return metadata || null;
-  }
-
-  let minStart = null;
-  let maxFinish = null;
-  let projectStartDate = null;
-  let projectFinishDate = null;
+function computeScheduleSummary(entries, metadata = null, tasks = []) {
+  const scheduleEntries = Array.isArray(entries) ? entries : [];
+  const taskList = Array.isArray(tasks) ? tasks : [];
 
   const metadataStart = metadata?.projectStartDate
     ? parseDateValue(metadata.projectStartDate)
@@ -501,28 +556,6 @@ function computeScheduleSummary(entries, metadata = null) {
     ? parseDateValue(metadata.projectFinish)
     : null;
 
-  entries.forEach((entry) => {
-    if (typeof entry.esHours === 'number' && !Number.isNaN(entry.esHours)) {
-      minStart = minStart === null ? entry.esHours : Math.min(minStart, entry.esHours);
-    }
-    if (typeof entry.efHours === 'number' && !Number.isNaN(entry.efHours)) {
-      maxFinish = maxFinish === null ? entry.efHours : Math.max(maxFinish, entry.efHours);
-    }
-    if (entry.startDate instanceof Date && !Number.isNaN(entry.startDate.getTime())) {
-      if (!projectStartDate || entry.startDate < projectStartDate) {
-        projectStartDate = entry.startDate;
-      }
-    }
-    if (entry.finishDate instanceof Date && !Number.isNaN(entry.finishDate.getTime())) {
-      if (!projectFinishDate || entry.finishDate > projectFinishDate) {
-        projectFinishDate = entry.finishDate;
-      }
-    }
-  });
-
-  const totalHours = maxFinish !== null ? maxFinish - (minStart || 0) : null;
-  const totalDays = totalHours !== null ? hoursToDays(totalHours) : null;
-
   const metadataHours =
     typeof metadata?.totalDurationHours === 'number' && !Number.isNaN(metadata.totalDurationHours)
       ? metadata.totalDurationHours
@@ -533,29 +566,162 @@ function computeScheduleSummary(entries, metadata = null) {
       : metadataHours !== null
       ? hoursToDays(metadataHours)
       : null;
-  const totalHoursValue = metadataHours ?? totalHours;
-  const totalDaysValue = metadataDays ?? totalDays;
 
-  const startDateValue = metadataStart || projectStartDate;
-  const finishDateValue = metadataFinish || projectFinishDate;
+  const l1Tasks = taskList.filter((task) => task && task.level === 1);
+  let primaryLevel = null;
+  taskList.forEach((task) => {
+    if (!task || typeof task.level !== 'number' || Number.isNaN(task.level)) {
+      return;
+    }
+    primaryLevel = primaryLevel === null ? task.level : Math.min(primaryLevel, task.level);
+  });
+  const primaryTasks =
+    l1Tasks.length > 0
+      ? l1Tasks
+      : primaryLevel !== null
+      ? taskList.filter((task) => task && task.level === primaryLevel)
+      : taskList;
+
+  let baseHoursTotal = 0;
+  let effectiveHoursTotal = 0;
+  let hasBaseHours = false;
+  let hasEffectiveHours = false;
+  let projectStartDate = null;
+  let projectFinishDate = null;
+
+  primaryTasks.forEach((task) => {
+    if (!task) return;
+    const schedule = task.schedule || null;
+
+    const baseHours = normalizeScheduleHours(schedule?.baseDurationHours, task.baseDurationDays);
+    if (typeof baseHours === 'number' && !Number.isNaN(baseHours)) {
+      baseHoursTotal += baseHours;
+      hasBaseHours = true;
+    }
+
+    const effectiveHours = normalizeScheduleHours(
+      schedule?.effectiveDurationHours,
+      task.calculatedDurationDays
+    );
+    if (typeof effectiveHours === 'number' && !Number.isNaN(effectiveHours)) {
+      effectiveHoursTotal += effectiveHours;
+      hasEffectiveHours = true;
+    }
+
+    const startDate = resolveFirstDate([
+      schedule?.startDate,
+      schedule?.startDateDisplay,
+      schedule?.startDateRaw,
+      task.raw?.StartDate,
+      task.raw?.['Start Date'],
+      task.raw?.Start
+    ]);
+    if (startDate) {
+      projectStartDate = projectStartDate && projectStartDate <= startDate ? projectStartDate : startDate;
+    }
+
+    const finishDate = resolveFirstDate([
+      schedule?.finishDate,
+      schedule?.finishDateDisplay,
+      schedule?.finishDateRaw,
+      task.raw?.FinishDate,
+      task.raw?.['Finish Date'],
+      task.raw?.Finish
+    ]);
+    if (finishDate) {
+      projectFinishDate = projectFinishDate && projectFinishDate >= finishDate ? projectFinishDate : finishDate;
+    }
+  });
+
+  if (!projectStartDate || !projectFinishDate) {
+    scheduleEntries.forEach((entry) => {
+      if (!entry) return;
+      const startDate = resolveFirstDate([
+        entry.startDate,
+        entry.startDateDisplay,
+        entry.startDateRaw
+      ]);
+      if (startDate) {
+        projectStartDate = projectStartDate && projectStartDate <= startDate ? projectStartDate : startDate;
+      }
+      const finishDate = resolveFirstDate([
+        entry.finishDate,
+        entry.finishDateDisplay,
+        entry.finishDateRaw
+      ]);
+      if (finishDate) {
+        projectFinishDate = projectFinishDate && projectFinishDate >= finishDate ? projectFinishDate : finishDate;
+      }
+    });
+  }
+
+  const baseHoursValue = hasBaseHours ? baseHoursTotal : null;
+  const effectiveHoursValue = hasEffectiveHours ? effectiveHoursTotal : null;
+
+  const baseDaysValue =
+    typeof baseHoursValue === 'number' && !Number.isNaN(baseHoursValue)
+      ? hoursToDays(baseHoursValue)
+      : null;
+  const effectiveDaysValue =
+    typeof effectiveHoursValue === 'number' && !Number.isNaN(effectiveHoursValue)
+      ? hoursToDays(effectiveHoursValue)
+      : null;
+
+  const totalDurationHours =
+    typeof effectiveHoursValue === 'number' && !Number.isNaN(effectiveHoursValue)
+      ? effectiveHoursValue
+      : typeof baseHoursValue === 'number' && !Number.isNaN(baseHoursValue)
+      ? baseHoursValue
+      : metadataHours;
+
+  const totalDurationDays =
+    typeof totalDurationHours === 'number' && !Number.isNaN(totalDurationHours)
+      ? hoursToDays(totalDurationHours)
+      : metadataDays;
+
+  const totalDurationDisplay =
+    (typeof effectiveDaysValue === 'number' && !Number.isNaN(effectiveDaysValue)
+      ? formatDurationLabel(effectiveDaysValue)
+      : '') ||
+    (typeof baseDaysValue === 'number' && !Number.isNaN(baseDaysValue)
+      ? formatDurationLabel(baseDaysValue)
+      : '') ||
+    (metadata?.totalDurationDisplay && metadata.totalDurationDisplay.trim()) ||
+    (typeof totalDurationDays === 'number' && !Number.isNaN(totalDurationDays)
+      ? formatDurationLabel(totalDurationDays)
+      : '');
+
+  const startDateValue = projectStartDate || metadataStart;
+  const finishDateValue = projectFinishDate || metadataFinish;
 
   const summary = {
-    totalDurationHours: totalHoursValue,
-    totalDurationDays: totalDaysValue,
-    totalDurationDisplay:
-      (metadata?.totalDurationDisplay && metadata.totalDurationDisplay.trim()) ||
-      (totalDaysValue !== null && !Number.isNaN(totalDaysValue) ? formatDurationLabel(totalDaysValue) : ''),
-    earliestStartHours: minStart,
-    latestFinishHours: maxFinish,
+    totalDurationHours,
+    totalDurationDays,
+    totalDurationDisplay,
+    totalBaseDurationHours: baseHoursValue,
+    totalBaseDurationDays: baseDaysValue,
+    totalBaseDurationDisplay:
+      typeof baseDaysValue === 'number' && !Number.isNaN(baseDaysValue)
+        ? formatDurationLabel(baseDaysValue)
+        : '',
+    totalEffectiveDurationHours: effectiveHoursValue,
+    totalEffectiveDurationDays: effectiveDaysValue,
+    totalEffectiveDurationDisplay:
+      typeof effectiveDaysValue === 'number' && !Number.isNaN(effectiveDaysValue)
+        ? formatDurationLabel(effectiveDaysValue)
+        : '',
     projectStartDate: startDateValue,
     projectFinishDate: finishDateValue,
-    projectStartDisplay:
-      (metadata?.projectStartDisplay && metadata.projectStartDisplay.trim()) ||
-      formatScheduleDate(startDateValue, metadata?.projectStart || metadata?.projectStartDate || ''),
-    projectFinishDisplay:
-      (metadata?.projectFinishDisplay && metadata.projectFinishDisplay.trim()) ||
-      formatScheduleDate(finishDateValue, metadata?.projectFinish || metadata?.projectFinishDate || ''),
-    metadata: metadata || null
+    projectStartDisplay: formatScheduleDate(
+      startDateValue,
+      metadata?.projectStartDisplay || metadata?.projectStart || metadata?.projectStartDate || ''
+    ),
+    projectFinishDisplay: formatScheduleDate(
+      finishDateValue,
+      metadata?.projectFinishDisplay || metadata?.projectFinish || metadata?.projectFinishDate || ''
+    ),
+    metadata: metadata || null,
+    primaryLevel
   };
 
   return summary;
@@ -574,6 +740,43 @@ function splitIds(value) {
     .split(/[,\n;]/)
     .map((part) => part.trim())
     .filter(Boolean);
+}
+
+function parseNormalizedDependencies(value) {
+  if (value === undefined || value === null) {
+    return { ids: [], types: [] };
+  }
+
+  const text = String(value).trim();
+  if (!text) {
+    return { ids: [], types: [] };
+  }
+
+  const ids = [];
+  const types = [];
+  const seen = new Set();
+
+  text.split(/[;,\n]/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .forEach((entry) => {
+      const match = entry.match(/(FS|FF|SS|SF)$/i);
+      let dependencyType = 'FS';
+      let idPortion = entry;
+      if (match && typeof match.index === 'number') {
+        dependencyType = match[1].toUpperCase();
+        idPortion = entry.slice(0, match.index);
+      }
+      const sanitized = idPortion.replace(/[^A-Za-z0-9_.-]+/g, '').trim();
+      if (!sanitized || seen.has(sanitized)) {
+        return;
+      }
+      seen.add(sanitized);
+      ids.push(sanitized);
+      types.push(dependencyType);
+    });
+
+  return { ids, types };
 }
 
 function normalizeBoolean(value) {
@@ -864,7 +1067,7 @@ function describeCurrentPathDuration() {
   if (!dataset || hierarchySelections.size === 0) {
     return {
       display: '—',
-      detail: 'Choose a Level 2 milestone to review its rolled-up timing.'
+      detail: `Choose a Level ${getPrimaryLevel()} milestone to review its rolled-up timing.`
     };
   }
 
@@ -900,7 +1103,7 @@ function renderDurationSummary() {
     dom.selectedDurationDisplay.textContent = '—';
     dom.selectedDurationDetail.textContent = 'Select a task to inspect its duration.';
     dom.pathDurationDisplay.textContent = '—';
-    dom.pathDurationDetail.textContent = 'Choose a Level 2 milestone to review its rolled-up timing.';
+    dom.pathDurationDetail.textContent = 'Choose a top-level milestone to review its rolled-up timing.';
     return;
   }
 
@@ -930,23 +1133,36 @@ function renderDurationSummary() {
     (totalDays !== null && !Number.isNaN(totalDays) ? formatDurationLabel(totalDays) : '—');
 
   dom.totalDurationDisplay.textContent = totalDisplay || '—';
-  if (totalDays !== null && !Number.isNaN(totalDays)) {
-    const summaryParts = [`${formatNumber(totalDays)} days · ${formatWeeksLabel(totalDays)}`];
-    const startDisplay = scheduleSummary?.projectStartDisplay;
-    const finishDisplay = scheduleSummary?.projectFinishDisplay;
-    if ((startDisplay && startDisplay.trim()) || (finishDisplay && finishDisplay.trim())) {
-      const windowParts = [];
-      if (startDisplay && startDisplay.trim()) {
-        windowParts.push(`Start ${startDisplay.trim()}`);
-      }
-      if (finishDisplay && finishDisplay.trim()) {
-        windowParts.push(`Finish ${finishDisplay.trim()}`);
-      }
-      if (windowParts.length > 0) {
-        summaryParts.push(windowParts.join(' · '));
-      }
+  const totalParts = [];
+  if (
+    typeof scheduleSummary?.totalEffectiveDurationHours === 'number' &&
+    !Number.isNaN(scheduleSummary.totalEffectiveDurationHours)
+  ) {
+    totalParts.push(describeAggregateDuration('Effective', scheduleSummary.totalEffectiveDurationHours));
+  }
+  if (
+    typeof scheduleSummary?.totalBaseDurationHours === 'number' &&
+    !Number.isNaN(scheduleSummary.totalBaseDurationHours)
+  ) {
+    totalParts.push(describeAggregateDuration('Base', scheduleSummary.totalBaseDurationHours));
+  }
+  const startDisplay = scheduleSummary?.projectStartDisplay;
+  const finishDisplay = scheduleSummary?.projectFinishDisplay;
+  if ((startDisplay && startDisplay.trim()) || (finishDisplay && finishDisplay.trim())) {
+    const windowParts = [];
+    if (startDisplay && startDisplay.trim()) {
+      windowParts.push(`Start ${startDisplay.trim()}`);
     }
-    dom.totalDurationDetail.textContent = summaryParts.join(' · ');
+    if (finishDisplay && finishDisplay.trim()) {
+      windowParts.push(`Finish ${finishDisplay.trim()}`);
+    }
+    if (windowParts.length > 0) {
+      totalParts.push(windowParts.join(' · '));
+    }
+  }
+
+  if (totalParts.length > 0) {
+    dom.totalDurationDetail.textContent = totalParts.join(' · ');
   } else if (hasDurationData) {
     dom.totalDurationDetail.textContent = 'Unable to compute a rolled-up total from the provided durations.';
   } else {
@@ -1014,7 +1230,8 @@ function renderLevelControls() {
   const networkEntries = Array.from(graphSelections.values());
 
   if (entries.length === 0 && networkEntries.length === 0) {
-    dom.levelControls.innerHTML = '<p class="empty-state">Select a Level 2 milestone to begin, then expand follow-on work from the network.</p>';
+    const primaryLevel = getPrimaryLevel();
+    dom.levelControls.innerHTML = `<p class="empty-state">Select a Level ${primaryLevel} milestone to begin, then expand follow-on work from the network.</p>`;
     return;
   }
 
@@ -1290,12 +1507,23 @@ function createTaskCard(task, level, options = {}) {
   return card;
 }
 
+function getPrimaryLevel() {
+  if (!dataset) return 1;
+  const summaryLevel = dataset.scheduleSummary?.primaryLevel;
+  if (typeof summaryLevel === 'number' && !Number.isNaN(summaryLevel)) {
+    return summaryLevel;
+  }
+  if (Array.isArray(dataset.levels) && dataset.levels.length > 0) {
+    const sorted = dataset.levels.slice().sort((a, b) => a - b);
+    return sorted[0] ?? 1;
+  }
+  return 1;
+}
+
 function getHierarchyLevels() {
   if (!dataset) return [];
   const sorted = dataset.levels.slice().sort((a, b) => a - b);
-  const levelTwoIndex = sorted.indexOf(2);
-  const relevant = levelTwoIndex >= 0 ? sorted.slice(levelTwoIndex) : sorted;
-  return relevant.slice(0, 2);
+  return sorted;
 }
 
 function handleHierarchySelection(level, task) {
