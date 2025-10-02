@@ -96,3 +96,33 @@ Tip: For complex reviews, start with only L2 milestones selected, then progressi
 | Dependency types all read `FS`. | Add a `Dependency Type` column with comma-separated values that mirror the `Predecessors IDs` sequence for each row (e.g., `FS,SS`). |
 
 For further enhancements, fork the repository and tailor the UI/logic in `webapp/app.js`—no backend code is involved.
+
+---
+
+## 7. Running the CPM scheduler
+
+In addition to the interactive visualizer, the repository ships with `cps_scheduler.py`, a Critical Path Method (CPM) engine that reads the level-4 rules workbook and produces normalized CSV/XLSX schedule reports. The script understands Finish-to-Start (FS), Start-to-Start (SS), Finish-to-Finish (FF), and Start-to-Finish (SF) dependencies, including positive and negative lags expressed in days (`d`), weeks (`w`), or months (`mo`).
+
+### Command-line usage
+
+Run the scheduler from the project root with your desired project start date and output paths:
+
+```bash
+python cps_scheduler.py \
+  --input cps_rules_level_4.xlsx \
+  --project-start 2024-01-01T08:00 \
+  --output-csv schedule_output.csv \
+  --output-xlsx schedule_output.xlsx \
+  --ignore-missing
+```
+
+- **`--project-start`** – ISO-8601 timestamp. Task start times align to the next working instant (8h/day, 5d/week, 20d/month).
+- **`--ignore-missing`** – Optional. Suppresses errors for predecessors that reference IDs absent from the workbook; missing links are listed in the console.
+- **`--effective-levels`** – Optional. Comma-separated Task Level labels that apply the “Level-n” duration rule (e.g., `--effective-levels L2,L3,L4`).
+- **`--sheet`** – Optional. Choose a different worksheet name if your source workbook stores tasks on a sheet other than `Sheet1`.
+
+Outputs include normalized durations (in hours), computed early/late dates, slack values, and ISO-formatted start/finish timestamps based on the working calendar.
+
+### Notebook automation
+
+For a guided workflow, open [`notebooks/run_cps_scheduler.ipynb`](notebooks/run_cps_scheduler.ipynb). The notebook exposes editable parameters for the workbook path, project start date, and output locations, then executes the scheduler and prints a preview of the resulting CSV. It is ideal for analysts who prefer reproducible, shareable runs without remembering command-line flags.
