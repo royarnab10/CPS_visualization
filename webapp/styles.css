@@ -644,6 +644,10 @@ button:disabled:hover {
   text-align: center;
 }
 
+.graph-empty[hidden] {
+  display: none !important;
+}
+
 .task-details-list {
   display: grid;
   gap: 0.5rem;
