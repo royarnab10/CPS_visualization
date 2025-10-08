@@ -7,6 +7,7 @@ An interactive, browser-based tool for validating complex critical path schedule
 - **Excel upload** – Drag in a schedule exported from your planning tool (the first worksheet is used).
 - **Collapsible exploration** – Tasks stay grouped by level and scope until you decide to reveal them.
 - **Interactive dependency graph** – Visualize predecessor/successor relationships, auto-include nearby context, and highlight task metadata.
+- **Task dependency explorer** – Filter by SIMPL phase, Commercial/Technical Lego Block, and scope definition to inspect DAGs derived from `amy_new_cps_only_tasks.xlsx`.
 - **Dependency typing** – Add a `Dependency Type` column (FS/SS/SF/FF) to distinguish relationships; otherwise Finish-to-Start (FS) is assumed.
 - **Stakeholder-friendly UI** – Styled for projection or screen sharing; no coding experience required.
 - **Download cleaned workbook** – Retrieve the Excel file produced by the preprocessing service for archival or further review.
@@ -27,14 +28,25 @@ No runtime installation is required beyond a modern web browser. To keep setup l
 2. **Open a terminal** in the project root.
 3. **Start the preprocessing server** (serves the web UI and cleans uploads):
 
-   ```bash
-   python server.py --port 8000
-   ```
+   - **macOS (Terminal):**
+
+     ```bash
+     python3 server.py --port 8000
+     ```
+
+   - **Windows (PowerShell or Command Prompt):**
+
+     ```powershell
+     py server.py --port 8000
+     ```
 
    The server streams and cleans uploaded workbooks before handing them to the front-end. Large workbooks may take a few seconds to process while hierarchy-based dependencies are restored.
 
 4. **Open the app** in your preferred browser at `http://localhost:8000`.
-5. **Load data**:
+5. **Choose an experience**:
+   - Visit `/index.html` for the original schedule explorer (upload XLSX, expand milestones, inspect dependencies).
+   - Visit `/dag.html` for the CPS Task Dependency Explorer that renders the DAG sourced from `amy_new_cps_only_tasks.xlsx`.
+6. **Load data** in the schedule explorer (optional):
    - Click **“Load sample data”** to experiment with the bundled JSON schedule, or
    - Use **“Upload Excel (.xlsx)”** and select `CPS_Rules_comm_LPA_Readiness.xlsx` (or your own workbook).
 
@@ -42,7 +54,26 @@ The visualization updates instantly after a successful upload—no rebuild steps
 
 ---
 
-## 3. Preparing your Excel workbook
+## 3. CPS Task Dependency Explorer
+
+The dedicated DAG view at [`/dag.html`](webapp/dag.html) ships with the processed dataset [`webapp/data/amy_new_cps_tasks.json`](webapp/data/amy_new_cps_tasks.json), a direct export of `amy_new_cps_only_tasks.xlsx`. It mirrors the styling and interaction patterns of the original app while tailoring the workflow to SIMPL phase and Lego Block analysis:
+
+1. **Select a SIMPL phase** – The first dropdown filters rows by the `Current SIMPL Phase (visibility)` column.
+2. **Pick a Commercial/Technical Lego Block** – The second dropdown narrows the tasks to a single Lego Block within the chosen phase.
+3. **Choose a scope definition** – The final dropdown isolates a `Scope Definition (Arnab)` value. The graph then renders a directed acyclic graph (DAG) containing the scoped tasks plus their immediate predecessors and successors.
+
+Key behaviours:
+
+- **Cross-block highlighting** – Any dependency node whose `Commercial/Technical Lego Block` differs from the active selection is outlined in orange to flag ownership or scope gaps.
+- **Context preservation** – Related nodes remain visible (with a softer colour palette) so upstream/downstream impacts stay in view.
+- **Task definition card** – Selecting a node surfaces the full row details (team, responsible person, timing, scope metadata, etc.).
+- **Graph controls** – Use **Fit to screen** to re-centre the layout and **Reset filters** to start another exploration path.
+
+To substitute your own CPS dataset, replace `amy_new_cps_only_tasks.xlsx`, regenerate the JSON via the helper script of your choice, and refresh the page. As long as the column headers remain unchanged the explorer will pick up the new data automatically.
+
+---
+
+## 4. Preparing your Excel workbook
 
 The first sheet of the workbook is parsed. A header row is required. The following columns are recognized (case-insensitive, additional columns are ignored):
 
@@ -64,7 +95,7 @@ The first sheet of the workbook is parsed. A header row is required. The followi
 
 ---
 
-## 4. Using the visualizer
+## 5. Using the visualizer
 
 1. **Levels & scopes panel** – Tasks are grouped by `Task Level` (e.g., L2 milestones) and then by `SCOPE`. Each level/scope pair is collapsible. Checking a task reveals it in the network. Leaving it unchecked keeps the milestone collapsed.
 2. **Level toggles** – Pills above the hierarchy toggle an entire level. When only some tasks of a level are displayed, the toggle shows a partial (indeterminate) state.
@@ -80,7 +111,7 @@ Tip: For complex reviews, start with only L2 milestones selected, then progressi
 
 ---
 
-## 5. Customisation tips
+## 6. Customisation tips
 
 - **Change the colour palette** – Update `levelPalette` near the top of [`webapp/app.js`](webapp/app.js) to align with your brand or portfolio.
 - **Default selection logic** – By default, only the lowest-numbered level is selected after upload (typically your top milestones). Adjust the logic in `prepareDataset` if your organisation uses a different convention.
@@ -88,7 +119,7 @@ Tip: For complex reviews, start with only L2 milestones selected, then progressi
 
 ---
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 | Symptom | Resolution |
 | --- | --- |
@@ -100,7 +131,7 @@ For further enhancements, fork the repository and tailor the UI/logic in `webapp
 
 ---
 
-## 7. Running the CPM scheduler
+## 8. Running the CPM scheduler
 
 In addition to the interactive visualizer, the repository ships with `cps_scheduler.py`, a Critical Path Method (CPM) engine that reads the level-4 rules workbook and produces normalized CSV/XLSX schedule reports. The script understands Finish-to-Start (FS), Start-to-Start (SS), Finish-to-Finish (FF), and Start-to-Finish (SF) dependencies, including positive and negative lags expressed in days (`d`), weeks (`w`), or months (`mo`).
 
