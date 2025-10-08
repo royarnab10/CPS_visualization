@@ -1784,11 +1784,12 @@ function updateGraph() {
             'background-color': 'data(color)',
             'background-opacity': 0.92,
             'label': 'data(label)',
-            'color': '#0f172a',
-            'font-size': '12px',
+            'color': '#0b1120',
+            'font-size': '13px',
             'font-weight': 600,
+            'line-height': '1.3',
             'text-wrap': 'wrap',
-            'text-max-width': 160,
+            'text-max-width': '170px',
             'text-valign': 'center',
             'text-halign': 'center',
             'shape': 'round-rectangle',
@@ -1799,8 +1800,10 @@ function updateGraph() {
             'shadow-color': 'rgba(15,23,42,0.25)',
             'shadow-offset-x': 0,
             'shadow-offset-y': 4,
-            'text-outline-width': 2,
-            'text-outline-color': 'rgba(255,255,255,0.85)'
+            'text-background-color': 'rgba(255,255,255,0.94)',
+            'text-background-opacity': 1,
+            'text-background-padding': 6,
+            'text-background-shape': 'roundrectangle'
           }
         },
         {
@@ -1809,7 +1812,8 @@ function updateGraph() {
             'border-style': 'dashed',
             'opacity': 0.75,
             'background-opacity': 0.5,
-            'color': '#1f2937'
+            'color': '#1f2937',
+            'text-background-opacity': 0.9
           }
         },
         {
@@ -1821,7 +1825,8 @@ function updateGraph() {
             'text-opacity': 0.45,
             'border-color': 'rgba(148,163,184,0.35)',
             'shadow-blur': 0,
-            'text-outline-opacity': 0
+            'text-outline-opacity': 0,
+            'text-background-opacity': 0.45
           }
         },
         {
@@ -1830,7 +1835,8 @@ function updateGraph() {
             'border-width': 4,
             'border-color': '#facc15',
             'shadow-color': 'rgba(250, 204, 21, 0.45)',
-            'shadow-blur': 18
+            'shadow-blur': 18,
+            'text-background-color': 'rgba(255,255,255,0.98)'
           }
         },
         {
@@ -1842,11 +1848,14 @@ function updateGraph() {
             'target-arrow-shape': 'triangle',
             'curve-style': 'unbundled-bezier',
             'label': 'data(type)',
-            'font-size': '9px',
-            'color': '#cbd5f5',
-            'text-background-color': 'rgba(15,23,42,0.85)',
+            'font-size': '10px',
+            'color': '#0f172a',
+            'text-wrap': 'wrap',
+            'text-max-width': '120px',
+            'text-rotation': 'autorotate',
+            'text-background-color': 'rgba(255,255,255,0.95)',
             'text-background-opacity': 1,
-            'text-background-padding': 3,
+            'text-background-padding': 4,
             'text-background-shape': 'roundrectangle'
           }
         },
