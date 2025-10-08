@@ -10,6 +10,7 @@ const dom = {
   phase: document.getElementById("phase-filter"),
   lego: document.getElementById("lego-filter"),
   scope: document.getElementById("scope-filter"),
+  lp: document.getElementById("lp-filter"),
   fit: document.getElementById("dag-fit"),
   reset: document.getElementById("dag-reset"),
   graph: document.getElementById("dag-cy"),
@@ -215,6 +216,7 @@ function updateLegoOptions() {
   dom.lego.value = "";
   dom.scope.innerHTML = '<option value="" selected>Select a scope…</option>';
   dom.scope.disabled = true;
+  resetLpOptions(true);
 }
 
 function updateScopeOptions() {
@@ -223,6 +225,7 @@ function updateScopeOptions() {
   if (legoValue == null) {
     dom.scope.innerHTML = '<option value="" selected>Select a scope…</option>';
     dom.scope.disabled = true;
+    resetLpOptions(true);
     return;
   }
   const options = new Set();
@@ -240,6 +243,44 @@ function updateScopeOptions() {
   dom.scope.innerHTML = placeholder + sorted.map((value) => buildOption(value)).join("");
   dom.scope.disabled = sorted.length === 0;
   dom.scope.value = "";
+  resetLpOptions(true);
+}
+
+function updateLpOptions() {
+  const phaseValue = getSelectedValue(dom.phase);
+  const legoValue = getSelectedValue(dom.lego);
+  const scopeValue = getSelectedValue(dom.scope);
+  if (scopeValue == null) {
+    resetLpOptions(true);
+    return;
+  }
+
+  const options = new Set();
+  for (const task of tasks) {
+    if (phaseValue != null && task.phase !== phaseValue) {
+      continue;
+    }
+    if (legoValue != null && task.lego !== legoValue) {
+      continue;
+    }
+    if (scopeValue != null && task.scope !== scopeValue) {
+      continue;
+    }
+    options.add(task.lp || "");
+  }
+
+  const sorted = Array.from(options).sort(localeCompare);
+  const placeholder = '<option value="" selected>Select an LP value…</option>';
+  dom.lp.innerHTML = placeholder + sorted.map((value) => buildOption(value)).join("");
+  dom.lp.disabled = sorted.length === 0;
+  dom.lp.value = "";
+}
+
+function resetLpOptions(disable = false) {
+  const placeholder = '<option value="" disabled selected>Select an LP value…</option>';
+  dom.lp.innerHTML = placeholder;
+  dom.lp.disabled = disable;
+  dom.lp.value = "";
 }
 
 function attachEventListeners() {
@@ -268,6 +309,13 @@ function attachEventListeners() {
   });
 
   dom.scope.addEventListener("change", () => {
+    updateLpOptions();
+    showGraphMessage("Select an LP value to visualize the graph.");
+    clearSelection();
+    updateGraph();
+  });
+
+  dom.lp.addEventListener("change", () => {
     clearSelection();
     updateGraph();
   });
@@ -290,8 +338,11 @@ function resetFilters() {
   dom.lego.disabled = true;
   dom.scope.innerHTML = '<option value="" disabled selected>Select a scope…</option>';
   dom.scope.disabled = true;
+  resetLpOptions(true);
   clearGraph();
-  showGraphMessage("Select a SIMPL phase, Commercial/Technical Lego Block, and scope definition to explore the dependency graph.");
+  showGraphMessage(
+    "Select a SIMPL phase, Commercial/Technical Lego Block, scope definition, and LP value to explore the dependency graph.",
+  );
   clearSelection();
 }
 
@@ -299,6 +350,7 @@ function updateGraph() {
   const phaseValue = getSelectedValue(dom.phase);
   const legoValue = getSelectedValue(dom.lego);
   const scopeValue = getSelectedValue(dom.scope);
+  const lpValue = getSelectedValue(dom.lp);
 
   if (phaseValue == null) {
     clearGraph();
@@ -318,6 +370,12 @@ function updateGraph() {
     return;
   }
 
+  if (lpValue == null) {
+    clearGraph();
+    showGraphMessage("Select an LP value to visualize the graph.");
+    return;
+  }
+
   const focusTasks = tasks.filter((task) => {
     if (phaseValue != null && task.phase !== phaseValue) {
       return false;
@@ -326,6 +384,9 @@ function updateGraph() {
       return false;
     }
     if (scopeValue != null && task.scope !== scopeValue) {
+      return false;
+    }
+    if (lpValue != null && task.lp !== lpValue) {
       return false;
     }
     return true;
@@ -340,101 +401,116 @@ function updateGraph() {
   ensureCy();
 
   const focusIds = new Set(focusTasks.map((task) => task.id));
-  const visited = new Set(focusIds);
-  const queue = Array.from(focusIds);
+  const nodeMap = new Map();
 
-  while (queue.length > 0) {
-    const currentId = queue.shift();
-    const task = tasksById.get(currentId);
+  function registerNode(task, isFocus) {
     if (!task) {
-      continue;
+      return;
     }
-    const neighbors = [...task.predecessors, ...task.successors];
-    for (const neighbor of neighbors) {
-      if (!tasksById.has(neighbor) || visited.has(neighbor)) {
+    const existing = nodeMap.get(task.id);
+    if (existing) {
+      if (isFocus) {
+        existing.classes.add("focus");
+        existing.classes.delete("context");
+      }
+      if (task.lego !== legoValue) {
+        existing.classes.add("lego-mismatch");
+      } else {
+        existing.classes.delete("lego-mismatch");
+      }
+      return;
+    }
+
+    const classes = new Set();
+    if (isFocus) {
+      classes.add("focus");
+    } else {
+      classes.add("context");
+    }
+    if (task.lego !== legoValue) {
+      classes.add("lego-mismatch");
+    }
+
+    nodeMap.set(task.id, {
+      task,
+      classes,
+    });
+  }
+
+  for (const task of focusTasks) {
+    registerNode(task, true);
+  }
+
+  for (const task of focusTasks) {
+    for (const predecessorId of task.predecessors) {
+      const predecessor = tasksById.get(predecessorId);
+      if (!predecessor) {
         continue;
       }
-      visited.add(neighbor);
-      queue.push(neighbor);
+      registerNode(predecessor, focusIds.has(predecessorId));
+    }
+    for (const successorId of task.successors) {
+      const successor = tasksById.get(successorId);
+      if (!successor) {
+        continue;
+      }
+      registerNode(successor, focusIds.has(successorId));
     }
   }
 
   const elements = [];
-  const focusEdges = new Set();
-
-  for (const id of visited) {
-    const task = tasksById.get(id);
-    if (!task) {
-      continue;
-    }
-    const classes = [];
-    if (focusIds.has(id)) {
-      classes.push("focus");
-    } else {
-      classes.push("context");
-    }
-    if (task.lego !== legoValue) {
-      classes.push("lego-mismatch");
-    }
-
+  const sortedNodes = Array.from(nodeMap.values()).sort((a, b) =>
+    a.task.id.localeCompare(b.task.id, undefined, { sensitivity: "base", numeric: true })
+  );
+  for (const { task, classes } of sortedNodes) {
     elements.push({
       group: "nodes",
       data: {
         id: task.id,
         label: formatNodeLabel(task),
       },
-      classes: classes.join(" "),
+      classes: Array.from(classes).join(" "),
     });
   }
 
   const edges = new Set();
-  for (const id of visited) {
-    const task = tasksById.get(id);
-    if (!task) {
-      continue;
-    }
-    for (const predecessor of task.predecessors) {
-      if (!visited.has(predecessor)) {
+  for (const task of focusTasks) {
+    for (const predecessorId of task.predecessors) {
+      if (!nodeMap.has(predecessorId)) {
         continue;
       }
-      const key = `${predecessor}->${id}`;
+      const key = `${predecessorId}->${task.id}`;
       if (edges.has(key)) {
         continue;
       }
       edges.add(key);
-      const isFocusEdge = focusIds.has(predecessor) && focusIds.has(id);
-      if (isFocusEdge) {
-        focusEdges.add(key);
-      }
+      const isFocusEdge = focusIds.has(predecessorId) && focusIds.has(task.id);
       elements.push({
         group: "edges",
         data: {
           id: key,
-          source: predecessor,
-          target: id,
+          source: predecessorId,
+          target: task.id,
         },
         classes: isFocusEdge ? "focus-edge" : "",
       });
     }
-    for (const successor of task.successors) {
-      if (!visited.has(successor)) {
+    for (const successorId of task.successors) {
+      if (!nodeMap.has(successorId)) {
         continue;
       }
-      const key = `${id}->${successor}`;
+      const key = `${task.id}->${successorId}`;
       if (edges.has(key)) {
         continue;
       }
       edges.add(key);
-      const isFocusEdge = focusIds.has(id) && focusIds.has(successor);
-      if (isFocusEdge) {
-        focusEdges.add(key);
-      }
+      const isFocusEdge = focusIds.has(task.id) && focusIds.has(successorId);
       elements.push({
         group: "edges",
         data: {
           id: key,
-          source: id,
-          target: successor,
+          source: task.id,
+          target: successorId,
         },
         classes: isFocusEdge ? "focus-edge" : "",
       });
@@ -446,7 +522,7 @@ function updateGraph() {
 
   const roots = Array.from(focusIds).filter((id) => {
     const predecessors = tasksById.get(id)?.predecessors || [];
-    return predecessors.filter((pred) => visited.has(pred)).length === 0;
+    return predecessors.filter((pred) => nodeMap.has(pred)).length === 0;
   });
 
   const layout = cyInstance.layout({
@@ -459,7 +535,7 @@ function updateGraph() {
   layout.run();
   cyInstance.fit(undefined, 80);
 
-  if (selectedTaskId && visited.has(selectedTaskId)) {
+  if (selectedTaskId && nodeMap.has(selectedTaskId)) {
     cyInstance.$id(selectedTaskId).select();
   } else {
     clearSelection();
@@ -593,13 +669,52 @@ function ensureCy() {
 }
 
 function formatNodeLabel(task) {
-  const lines = [task.id];
-  if (task.name) {
-    lines.push(task.name);
+  const lines = [];
+  if (task.id) {
+    lines.push(task.id);
   }
-  if (task.raw["Resp Function"]) {
-    lines.push(task.raw["Resp Function"]);
+  const wrappedName = wrapLabelText(task.name);
+  if (wrappedName) {
+    lines.push(wrappedName);
   }
+  return lines.join("\n");
+}
+
+function wrapLabelText(text, maxLineLength = 22) {
+  if (!text) {
+    return "";
+  }
+
+  const words = String(text)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length === 0) {
+    return "";
+  }
+
+  const lines = [];
+  let currentLine = words.shift();
+
+  for (const word of words) {
+    if (!currentLine) {
+      currentLine = word;
+      continue;
+    }
+
+    if ((currentLine + " " + word).length <= maxLineLength) {
+      currentLine += " " + word;
+    } else {
+      lines.push(currentLine);
+      currentLine = word;
+    }
+  }
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
   return lines.join("\n");
 }
 
