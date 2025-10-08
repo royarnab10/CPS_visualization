@@ -120,7 +120,8 @@ body {
 }
 
 button,
-.file-input span {
+.file-input span,
+.secondary-button {
   border: none;
   border-radius: 999px;
   padding: 0.6rem 1.2rem;
@@ -128,6 +129,11 @@ button,
   font-size: 0.95rem;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  text-decoration: none;
 }
 
 button {
@@ -146,7 +152,8 @@ button {
   box-shadow: 0 2px 12px rgba(37, 99, 235, 0.25);
 }
 
-.actions .secondary-button.disabled {
+.actions .secondary-button.disabled,
+.secondary-button.disabled {
   opacity: 0.6;
   pointer-events: none;
 }
