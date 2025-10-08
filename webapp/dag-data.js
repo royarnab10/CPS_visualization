@@ -23,6 +23,17 @@ function normalizeRecord(record) {
       normalized[key] = String(value);
     }
   }
+
+  if ("Scope Definition (Arnab)" in normalized) {
+    normalized["Scope Definition (Arnab)"] = normalizeScope(
+      normalized["Scope Definition (Arnab)"],
+    );
+  }
+
+  if ("Scope" in normalized) {
+    normalized["Scope"] = normalizeScope(normalized["Scope"]);
+  }
+
   return normalized;
 }
 
@@ -48,7 +59,7 @@ export function buildTaskIndex(records) {
         record["Commercial Lego Block"] ||
         record["Technical Lego Block"] ||
         "",
-      scope: record["Scope Definition (Arnab)"] || record["Scope"] || "",
+      scope: normalizeScope(record["Scope Definition (Arnab)"] || record["Scope"] || ""),
       lp: record.LP || "",
       predecessors: parseLinkedIds(
         record.Predecessors || record["Predecessors IDs"] || "",
@@ -85,6 +96,19 @@ function resolveTaskId(record) {
     }
   }
   return "";
+}
+
+function normalizeScope(value) {
+  if (value == null) {
+    return "";
+  }
+
+  const text = String(value).trim();
+  if (!text) {
+    return "";
+  }
+
+  return text.toUpperCase();
 }
 
 export function parseLinkedIds(value) {
