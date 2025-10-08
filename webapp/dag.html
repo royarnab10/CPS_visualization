@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CPS Task Dependency Explorer</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>CPS Task Dependency Explorer</h1>
+        <p>
+          Visualize the tasks from the critical path success plan, explore their
+          interdependencies, and surface scope mismatches across teams.
+        </p>
+      </div>
+      <div class="actions">
+        <a class="secondary-button" href="index.html">Back to schedule view</a>
+        <a class="secondary-button" href="data/amy_new_cps_tasks.json" download>
+          Download source data
+        </a>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="sidebar" id="sidebar">
+        <div class="panel">
+          <h2>Filter tasks</h2>
+          <p class="panel-help">
+            Filter first by SIMPL phase to narrow the view, then focus on a
+            Commercial/Technical Lego Block and specific scope definition. The
+            graph automatically adds related predecessors and successors so you
+            can understand upstream and downstream implications.
+          </p>
+          <div class="filter-group" id="filter-group">
+            <div class="filter-control">
+              <label for="phase-filter">Current SIMPL Phase</label>
+              <select id="phase-filter"></select>
+            </div>
+            <div class="filter-control">
+              <label for="lego-filter">Commercial/Technical Lego Block</label>
+              <select id="lego-filter" disabled></select>
+            </div>
+            <div class="filter-control">
+              <label for="scope-filter">Scope Definition (Arnab)</label>
+              <select id="scope-filter" disabled></select>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel legend-card">
+          <h2>Legend</h2>
+          <ul class="legend-list">
+            <li class="legend-item">
+              <span class="legend-swatch focus"></span>
+              <span>Matches all selected filters</span>
+            </li>
+            <li class="legend-item">
+              <span class="legend-swatch context"></span>
+              <span>Related predecessor or successor</span>
+            </li>
+            <li class="legend-item">
+              <span class="legend-swatch mismatch"></span>
+              <span>Different Commercial/Technical Lego Block</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="visualization">
+        <div class="panel">
+          <h2>Task dependency graph</h2>
+          <p class="panel-help">
+            Click a node to inspect the full task definition. The layout is
+            directional: arrows flow from predecessors to successors. Nodes from
+            other Commercial/Technical Lego Blocks are highlighted so you can
+            address ownership gaps.
+          </p>
+          <div class="graph-wrapper">
+            <div class="graph" id="dag-cy" role="presentation"></div>
+            <div class="graph-empty" id="graph-empty">
+              Select a SIMPL phase, Commercial/Technical Lego Block, and scope
+              definition to explore the dependency graph.
+            </div>
+          </div>
+          <div class="graph-controls">
+            <button id="dag-fit" type="button">Fit to screen</button>
+            <button id="dag-reset" type="button">Reset filters</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="task-details-region">
+        <div class="panel task-panel">
+          <h2>Task details</h2>
+          <div id="task-card" class="task-details empty">
+            <p>Select a node from the graph to view its full task definition.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
+    <script src="dag.js" type="module"></script>
+  </body>
+</html>

@@ -496,6 +496,143 @@ button:disabled:hover {
   margin: 0;
 }
 
+/* DAG explorer additions */
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.filter-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.filter-control label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(15, 23, 42, 0.6);
+}
+
+.filter-control select,
+.filter-control option {
+  font-family: inherit;
+}
+
+.filter-control select {
+  border-radius: 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.95rem;
+  background: rgba(255, 255, 255, 0.92);
+  color: inherit;
+  box-shadow: 0 10px 18px rgba(15, 23, 42, 0.08);
+}
+
+.filter-control select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.legend-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.legend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: rgba(15, 23, 42, 0.75);
+}
+
+.legend-swatch {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 0.4rem;
+  border: 2px solid rgba(15, 23, 42, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+
+.legend-swatch.focus {
+  background: #2563eb;
+  border-color: #1d4ed8;
+}
+
+.legend-swatch.context {
+  background: #c7d2fe;
+  border-color: #818cf8;
+}
+
+.legend-swatch.mismatch {
+  background: #fb923c;
+  border-color: #f97316;
+}
+
+.graph-wrapper {
+  position: relative;
+}
+
+.graph-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(248, 250, 252, 0.85);
+  color: rgba(15, 23, 42, 0.65);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  z-index: 10;
+  border-radius: 1.25rem;
+  padding: 1.5rem;
+  text-align: center;
+}
+
+.task-details-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.task-details-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.45fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.75rem;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.task-details-key {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(15, 23, 42, 0.55);
+}
+
+.task-details-value {
+  font-size: 0.95rem;
+  color: rgba(15, 23, 42, 0.85);
+  white-space: pre-wrap;
+}
+
 .task-edit-form {
   display: flex;
   flex-direction: column;
