@@ -55,7 +55,7 @@
           <h2>Filter tasks</h2>
           <p class="panel-help">
             Filter first by SIMPL phase to narrow the view, then focus on a
-            Commercial/Technical Lego Block and specific scope definition. The
+            Commercial/Technical Lego Block, scope definition, and LP value. The
             graph automatically adds related predecessors and successors so you
             can understand upstream and downstream implications.
           </p>
@@ -71,6 +71,10 @@
             <div class="filter-control">
               <label for="scope-filter">Scope Definition (Arnab)</label>
               <select id="scope-filter" disabled></select>
+            </div>
+            <div class="filter-control">
+              <label for="lp-filter">LP</label>
+              <select id="lp-filter" disabled></select>
             </div>
           </div>
         </div>
@@ -106,8 +110,8 @@
           <div class="graph-wrapper">
             <div class="graph" id="dag-cy" role="presentation"></div>
             <div class="graph-empty" id="graph-empty">
-              Select a SIMPL phase, Commercial/Technical Lego Block, and scope
-              definition to explore the dependency graph.
+              Select a SIMPL phase, Commercial/Technical Lego Block, scope
+              definition, and LP value to explore the dependency graph.
             </div>
           </div>
           <div class="graph-controls">

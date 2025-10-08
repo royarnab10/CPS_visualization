@@ -49,6 +49,7 @@ export function buildTaskIndex(records) {
         record["Technical Lego Block"] ||
         "",
       scope: record["Scope Definition (Arnab)"] || record["Scope"] || "",
+      lp: record.LP || "",
       predecessors: parseLinkedIds(
         record.Predecessors || record["Predecessors IDs"] || "",
       ),
