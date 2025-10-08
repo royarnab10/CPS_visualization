@@ -13,6 +13,15 @@
     />
   </head>
   <body>
+    <div
+      id="dag-processing-notice"
+      class="processing-notice"
+      role="status"
+      aria-live="polite"
+      hidden
+    >
+      Processing task dependency workbook…
+    </div>
     <header class="app-header">
       <div>
         <h1>CPS Task Dependency Explorer</h1>
@@ -28,10 +37,15 @@
         </a>
       </nav>
       <div class="actions">
-        <a class="secondary-button" href="index.html">Back to schedule view</a>
-        <a class="secondary-button" href="data/amy_new_cps_tasks.json" download>
-          Download source data
+        <label class="file-input">
+          <span>Upload Excel (.xlsx)</span>
+          <input id="dag-file-input" type="file" accept=".xlsx,.xls" />
+        </label>
+        <button id="dag-load-default" type="button">Reload default data</button>
+        <a id="dag-download-json" class="secondary-button" download>
+          Download current data
         </a>
+        <a class="secondary-button" href="index.html">Back to schedule view</a>
       </div>
     </header>
 

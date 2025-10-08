@@ -12,7 +12,10 @@ from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
-import pandas as pd
+try:
+    import pandas as pd
+except ImportError:  # pragma: no cover - pandas is optional for most workflows
+    pd = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -77,8 +80,13 @@ def preprocess_excel(data: bytes) -> Tuple[List[Dict[str, str]], Dict[str, int |
     return result.rows, result.metadata
 
 
-def preprocess_excel_to_dataframe(data: bytes) -> pd.DataFrame:
+def preprocess_excel_to_dataframe(data: bytes) -> "pd.DataFrame":
     """Return the cleaned workbook rows as a :class:`pandas.DataFrame`."""
+
+    if pd is None:  # pragma: no cover - exercised only when pandas is available
+        raise ImportError(
+            "pandas is required to export the cleaned workbook as a DataFrame."
+        )
 
     result = preprocess_excel_with_workbook(data)
     return _result_to_dataframe(result)
@@ -656,8 +664,13 @@ def _column_letter(index: int) -> str:
     return "".join(reversed(letters))
 
 
-def _result_to_dataframe(result: PreprocessResult) -> pd.DataFrame:
+def _result_to_dataframe(result: PreprocessResult) -> "pd.DataFrame":
     """Convert a :class:`PreprocessResult` into a :class:`pandas.DataFrame`."""
+
+    if pd is None:  # pragma: no cover - exercised only when pandas is available
+        raise ImportError(
+            "pandas is required to export the cleaned workbook as a DataFrame."
+        )
 
     dataframe = pd.DataFrame(result.rows)
     if result.workbook.headers:
