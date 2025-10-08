@@ -146,6 +146,11 @@ button {
   box-shadow: 0 2px 12px rgba(37, 99, 235, 0.25);
 }
 
+.actions .secondary-button.disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
 button:hover,
 .file-input:hover span {
   transform: translateY(-1px);

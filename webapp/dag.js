@@ -1,6 +1,12 @@
+import { buildTaskIndex, normalizeRecords, parseLinkedIds } from "./dag-data.js";
+
 const EMPTY_TOKEN = "__EMPTY__";
 
 const dom = {
+  fileInput: document.getElementById("dag-file-input"),
+  loadDefault: document.getElementById("dag-load-default"),
+  download: document.getElementById("dag-download-json"),
+  processingNotice: document.getElementById("dag-processing-notice"),
   phase: document.getElementById("phase-filter"),
   lego: document.getElementById("lego-filter"),
   scope: document.getElementById("scope-filter"),
@@ -33,64 +39,148 @@ const detailFields = [
   ["Bucket of Work (visibility - old)", "Bucket of Work"],
 ];
 
+let rawRecords = [];
 let tasks = [];
 let tasksById = new Map();
 let cyInstance = null;
 let selectedTaskId = null;
+let downloadUrl = null;
+let downloadFilename = "cps_tasks.json";
 
 init();
 
 async function init() {
+  attachEventListeners();
+  updateDownloadLink();
+  await loadDefaultDataset(false);
+}
+
+async function loadDefaultDataset(showSpinner = true) {
   try {
+    if (showSpinner) {
+      setProcessingState("Loading default dataset…", true);
+    }
     const response = await fetch("data/amy_new_cps_tasks.json");
     if (!response.ok) {
       throw new Error(`Failed to load dataset (status ${response.status})`);
     }
     const records = await response.json();
-    ingestRecords(records);
-    populatePhaseOptions();
-    attachEventListeners();
-    resetFilters();
+    setDataset(records, { filename: "amy_new_cps_tasks.json" });
   } catch (error) {
     console.error(error);
     showGraphMessage("Unable to load the CPS task data. Refresh the page to try again.");
+  } finally {
+    if (showSpinner) {
+      setProcessingState("", false);
+    }
   }
 }
 
-function ingestRecords(records) {
-  tasks = [];
-  tasksById = new Map();
-  for (const record of records) {
-    const clean = {};
-    for (const [key, value] of Object.entries(record)) {
-      if (typeof value === "string") {
-        clean[key] = value.trim();
-      } else if (value == null) {
-        clean[key] = "";
-      } else {
-        clean[key] = String(value);
-      }
-    }
+function setDataset(records, options = {}) {
+  rawRecords = normalizeRecords(records);
+  const { tasks: nextTasks, tasksById: nextMap } = buildTaskIndex(rawRecords);
+  tasks = nextTasks;
+  tasksById = nextMap;
+  downloadFilename = options.filename || "cps_tasks.json";
+  populatePhaseOptions();
+  resetFilters();
+  updateDownloadLink();
+}
 
-    const id = clean.TaskID;
-    if (!id) {
-      continue;
-    }
-
-    const task = {
-      id,
-      name: clean["Task Name"] || "Untitled task",
-      phase: clean["Current SIMPL Phase (visibility)"] || "",
-      lego: clean["Commercial/Technical Lego Block"] || "",
-      scope: clean["Scope Definition (Arnab)"] || "",
-      predecessors: parseLinkedIds(clean.Predecessors),
-      successors: parseLinkedIds(clean.Successors),
-      raw: clean,
-    };
-
-    tasks.push(task);
-    tasksById.set(task.id, task);
+async function handleFileUpload(event) {
+  const input = event.target;
+  const file = input && input.files && input.files[0] ? input.files[0] : null;
+  if (!file) {
+    return;
   }
+
+  const displayName = file.name || "Uploaded workbook";
+  setProcessingState(`Processing ${displayName}…`, true);
+
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch("/api/dag/upload", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const message = errorText || `Upload failed with status ${response.status}`;
+      throw new Error(message);
+    }
+
+    const payload = await response.json();
+    const records = Array.isArray(payload.records) ? payload.records : [];
+    const safeStem = sanitizeFilenameStem(displayName.replace(/\.xlsx?$/i, ""));
+    const downloadName = `${safeStem || "cps_tasks"}.json`;
+    setDataset(records, { filename: downloadName });
+  } catch (error) {
+    console.error(error);
+    showGraphMessage(
+      "Unable to process the uploaded workbook. Please verify the format and try again.",
+    );
+  } finally {
+    if (input) {
+      input.value = "";
+    }
+    setProcessingState("", false);
+  }
+}
+
+function setProcessingState(message, active) {
+  const notice = dom.processingNotice;
+  const text = message || "Processing task dependency workbook…";
+  if (notice) {
+    if (active) {
+      notice.textContent = text;
+      notice.hidden = false;
+    } else {
+      notice.hidden = true;
+    }
+  }
+  if (dom.fileInput) {
+    dom.fileInput.disabled = active;
+  }
+  if (dom.loadDefault) {
+    dom.loadDefault.disabled = active;
+  }
+}
+
+function updateDownloadLink() {
+  if (!dom.download) {
+    return;
+  }
+
+  if (downloadUrl) {
+    URL.revokeObjectURL(downloadUrl);
+    downloadUrl = null;
+  }
+
+  if (!rawRecords.length) {
+    dom.download.href = "";
+    dom.download.removeAttribute("download");
+    dom.download.setAttribute("aria-disabled", "true");
+    dom.download.classList.add("disabled");
+    return;
+  }
+
+  const blob = new Blob([JSON.stringify(rawRecords, null, 2)], {
+    type: "application/json",
+  });
+  downloadUrl = URL.createObjectURL(blob);
+  dom.download.href = downloadUrl;
+  dom.download.download = downloadFilename;
+  dom.download.setAttribute("aria-disabled", "false");
+  dom.download.classList.remove("disabled");
+}
+
+function sanitizeFilenameStem(value) {
+  if (!value) {
+    return "";
+  }
+  return value.replace(/[^A-Za-z0-9_.-]+/g, "_");
 }
 
 function populatePhaseOptions() {
@@ -104,7 +194,7 @@ function populatePhaseOptions() {
   const sorted = Array.from(options).sort(localeCompare);
   const placeholder = '<option value="" selected>Select a phase…</option>';
   dom.phase.innerHTML = placeholder + sorted.map((value) => buildOption(value)).join("");
-  dom.phase.disabled = false;
+  dom.phase.disabled = sorted.length === 0;
 }
 
 function updateLegoOptions() {
@@ -153,6 +243,16 @@ function updateScopeOptions() {
 }
 
 function attachEventListeners() {
+  if (dom.fileInput) {
+    dom.fileInput.addEventListener("change", handleFileUpload);
+  }
+
+  if (dom.loadDefault) {
+    dom.loadDefault.addEventListener("click", () => {
+      loadDefaultDataset();
+    });
+  }
+
   dom.phase.addEventListener("change", () => {
     updateLegoOptions();
     showGraphMessage("Select a Commercial/Technical Lego Block to continue.");
@@ -503,21 +603,6 @@ function formatNodeLabel(task) {
   return lines.join("\n");
 }
 
-function parseLinkedIds(value) {
-  if (!value) {
-    return [];
-  }
-  return value
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => {
-      const match = part.match(/^(\d+)/);
-      return match ? match[1] : null;
-    })
-    .filter(Boolean);
-}
-
 function localeCompare(a, b) {
   return a.localeCompare(b, undefined, { sensitivity: "base" });
 }
@@ -604,3 +689,9 @@ function clearSelection() {
   selectedTaskId = null;
   renderTaskCard(null);
 }
+
+window.addEventListener("beforeunload", () => {
+  if (downloadUrl) {
+    URL.revokeObjectURL(downloadUrl);
+  }
+});
