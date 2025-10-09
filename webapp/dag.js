@@ -55,10 +55,30 @@ const FOCUS_TEXT_OUTLINE_COLOR = "rgba(248, 250, 252, 0.92)";
 const ZOOM_STYLE_DEFAULTS = {
   baseFontSize: 12,
   focusFontBonus: 2,
-  minFontSize: 11,
-  maxFontSize: 28,
+  minFontSize: 6,
+  maxFontSize: 30,
   baseOutlineWidth: 4,
-  minOutlineWidth: 1.2,
+  minOutlineWidth: 1,
+  baseNodePadding: 12,
+  minNodePadding: 5,
+  maxNodePadding: 26,
+  baseBorderWidth: 2,
+  minBorderWidth: 0.75,
+  maxBorderWidth: 4.5,
+  focusBorderBonus: 1.5,
+  baseEdgeWidth: 2,
+  minEdgeWidth: 0.6,
+  maxEdgeWidth: 4.5,
+  focusEdgeBonus: 1.5,
+  baseArrowScale: 1,
+  minArrowScale: 0.6,
+  maxArrowScale: 1.8,
+  baseShadowBlur: 18,
+  minShadowBlur: 4,
+  maxShadowBlur: 30,
+  baseShadowOffsetY: 4,
+  minShadowOffsetY: 1,
+  maxShadowOffsetY: 9,
 };
 
 init();
@@ -730,6 +750,26 @@ function applyZoomResponsiveStyles() {
     maxFontSize,
     baseOutlineWidth,
     minOutlineWidth,
+    baseNodePadding,
+    minNodePadding,
+    maxNodePadding,
+    baseBorderWidth,
+    minBorderWidth,
+    maxBorderWidth,
+    focusBorderBonus,
+    baseEdgeWidth,
+    minEdgeWidth,
+    maxEdgeWidth,
+    focusEdgeBonus,
+    baseArrowScale,
+    minArrowScale,
+    maxArrowScale,
+    baseShadowBlur,
+    minShadowBlur,
+    maxShadowBlur,
+    baseShadowOffsetY,
+    minShadowOffsetY,
+    maxShadowOffsetY,
   } = ZOOM_STYLE_DEFAULTS;
 
   const zoom = Math.max(cyInstance.zoom(), 0.1);
@@ -746,30 +786,76 @@ function applyZoomResponsiveStyles() {
     minOutlineWidth,
     baseOutlineWidth - 0.5
   );
+  const nodePadding = clamp(baseNodePadding * zoomFactor, minNodePadding, maxNodePadding);
+  const baseBorder = clamp(baseBorderWidth * zoomFactor, minBorderWidth, maxBorderWidth);
+  const computedFocusBorder = clamp(
+    (baseBorderWidth + focusBorderBonus) * zoomFactor,
+    minBorderWidth + focusBorderBonus * 0.6,
+    maxBorderWidth + focusBorderBonus
+  );
+  const focusBorder = Math.max(computedFocusBorder, baseBorder + 0.5);
+  const edgeWidth = clamp(baseEdgeWidth * zoomFactor, minEdgeWidth, maxEdgeWidth);
+  const focusEdgeWidth = clamp(
+    (baseEdgeWidth + focusEdgeBonus) * zoomFactor,
+    minEdgeWidth + 0.2,
+    maxEdgeWidth + focusEdgeBonus
+  );
+  const arrowScale = clamp(baseArrowScale * zoomFactor, minArrowScale, maxArrowScale);
+  const shadowBlur = clamp(baseShadowBlur * zoomFactor, minShadowBlur, maxShadowBlur);
+  const shadowOffsetY = clamp(
+    baseShadowOffsetY * zoomFactor,
+    minShadowOffsetY,
+    maxShadowOffsetY
+  );
+  const focusPadding = clamp(nodePadding * 1.05, minNodePadding + 1, maxNodePadding + 2);
+  const selectedPadding = clamp(nodePadding * 1.08, minNodePadding + 2, maxNodePadding + 4);
 
   const style = cyInstance.style();
   style
     .selector("node")
     .style("font-size", `${baseFont}px`)
-    .style("text-outline-width", outlineWidth);
+    .style("text-outline-width", outlineWidth)
+    .style("padding", `${nodePadding}px`)
+    .style("border-width", baseBorder);
   style
     .selector("node.context")
     .style("font-size", `${baseFont}px`)
-    .style("text-outline-width", outlineWidth);
+    .style("text-outline-width", outlineWidth)
+    .style("padding", `${nodePadding}px`)
+    .style("border-width", baseBorder);
   style
     .selector("node.lego-mismatch")
     .style("font-size", `${baseFont}px`)
-    .style("text-outline-width", outlineWidth);
+    .style("text-outline-width", outlineWidth)
+    .style("padding", `${nodePadding}px`)
+    .style("border-width", baseBorder);
   style
     .selector("node.focus")
     .style("font-size", `${focusFont}px`)
     .style("text-outline-width", focusOutlineWidth)
-    .style("text-outline-color", FOCUS_TEXT_OUTLINE_COLOR);
+    .style("text-outline-color", FOCUS_TEXT_OUTLINE_COLOR)
+    .style("padding", `${focusPadding}px`)
+    .style("border-width", focusBorder)
+    .style("shadow-blur", shadowBlur)
+    .style("shadow-offset-y", shadowOffsetY);
   style
     .selector("node.focus.lego-mismatch")
     .style("font-size", `${focusFont}px`)
     .style("text-outline-width", focusOutlineWidth)
-    .style("text-outline-color", FOCUS_TEXT_OUTLINE_COLOR);
+    .style("text-outline-color", FOCUS_TEXT_OUTLINE_COLOR)
+    .style("padding", `${focusPadding}px`)
+    .style("border-width", focusBorder)
+    .style("shadow-blur", shadowBlur)
+    .style("shadow-offset-y", shadowOffsetY);
+  style
+    .selector("node:selected")
+    .style("border-width", Math.max(focusBorder + 0.75, baseBorder + 1))
+    .style("padding", `${selectedPadding}px`);
+  style.selector("edge").style("width", edgeWidth).style("arrow-scale", arrowScale);
+  style
+    .selector("edge.focus-edge")
+    .style("width", focusEdgeWidth)
+    .style("arrow-scale", arrowScale);
   style.update();
 }
 
