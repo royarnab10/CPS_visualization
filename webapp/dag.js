@@ -12,6 +12,7 @@ const dom = {
   scope: document.getElementById("scope-filter"),
   lp: document.getElementById("lp-filter"),
   fit: document.getElementById("dag-fit"),
+  viewAll: document.getElementById("dag-view-all"),
   reset: document.getElementById("dag-reset"),
   graph: document.getElementById("dag-cy"),
   graphEmpty: document.getElementById("graph-empty"),
@@ -48,6 +49,8 @@ let selectedTaskId = null;
 let downloadUrl = null;
 let downloadFilename = "cps_tasks.json";
 let zoomStyleUpdateScheduled = false;
+
+const FOCUS_TEXT_OUTLINE_COLOR = "rgba(248, 250, 252, 0.92)";
 
 const ZOOM_STYLE_DEFAULTS = {
   baseFontSize: 12,
@@ -335,6 +338,13 @@ function attachEventListeners() {
     }
   });
 
+  if (dom.viewAll) {
+    dom.viewAll.addEventListener("click", () => {
+      clearSelection();
+      resetGraphFocus();
+    });
+  }
+
   dom.reset.addEventListener("click", () => {
     resetFilters();
   });
@@ -589,12 +599,12 @@ function ensureCy() {
           "background-color": "#2563eb",
           "border-color": "#1d4ed8",
           color: "#ffffff",
-          "font-weight": 700,
+          "font-weight": 600,
           "shadow-blur": 18,
           "shadow-color": "rgba(37, 99, 235, 0.28)",
           "shadow-offset-x": 0,
           "shadow-offset-y": 4,
-          "text-outline-color": "rgba(15,23,42,0.45)",
+          "text-outline-color": FOCUS_TEXT_OUTLINE_COLOR,
         },
       },
       {
@@ -622,7 +632,7 @@ function ensureCy() {
           "background-color": "#f43f5e",
           "border-color": "#e11d48",
           color: "#ffffff",
-          "text-outline-color": "rgba(15,23,42,0.45)",
+          "text-outline-color": FOCUS_TEXT_OUTLINE_COLOR,
         },
       },
       {
@@ -754,12 +764,12 @@ function applyZoomResponsiveStyles() {
     .selector("node.focus")
     .style("font-size", `${focusFont}px`)
     .style("text-outline-width", focusOutlineWidth)
-    .style("text-outline-color", "rgba(15,23,42,0.45)");
+    .style("text-outline-color", FOCUS_TEXT_OUTLINE_COLOR);
   style
     .selector("node.focus.lego-mismatch")
     .style("font-size", `${focusFont}px`)
     .style("text-outline-width", focusOutlineWidth)
-    .style("text-outline-color", "rgba(15,23,42,0.45)");
+    .style("text-outline-color", FOCUS_TEXT_OUTLINE_COLOR);
   style.update();
 }
 
