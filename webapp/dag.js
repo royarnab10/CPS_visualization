@@ -50,7 +50,7 @@ let downloadUrl = null;
 let downloadFilename = "cps_tasks.json";
 let zoomStyleUpdateScheduled = false;
 
-const FOCUS_TEXT_OUTLINE_COLOR = "rgba(248, 250, 252, 0.92)";
+const FOCUS_TEXT_OUTLINE_COLOR = "rgba(15, 23, 42, 0.82)";
 
 const ZOOM_STYLE_DEFAULTS = {
   baseFontSize: 12,
