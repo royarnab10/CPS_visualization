@@ -310,7 +310,6 @@ function attachEventListeners() {
 
   dom.scope.addEventListener("change", () => {
     updateLpOptions();
-    showGraphMessage("Select an LP value to visualize the graph.");
     clearSelection();
     updateGraph();
   });
@@ -361,18 +360,6 @@ function updateGraph() {
   if (legoValue == null) {
     clearGraph();
     showGraphMessage("Select a Commercial/Technical Lego Block to continue.");
-    return;
-  }
-
-  if (scopeValue == null) {
-    clearGraph();
-    showGraphMessage("Select a scope definition to visualize the graph.");
-    return;
-  }
-
-  if (lpValue == null) {
-    clearGraph();
-    showGraphMessage("Select an LP value to visualize the graph.");
     return;
   }
 
@@ -517,6 +504,7 @@ function updateGraph() {
     }
   }
 
+  resetGraphFocus(false);
   cyInstance.elements().remove();
   cyInstance.add(elements);
 
@@ -658,6 +646,12 @@ function ensureCy() {
           color: "#0f172a",
         },
       },
+      {
+        selector: ".dimmed",
+        style: {
+          display: "none",
+        },
+      },
     ],
   });
 
@@ -671,12 +665,14 @@ function ensureCy() {
     selectedTaskId = event.target.id();
     const task = tasksById.get(selectedTaskId) || null;
     renderTaskCard(task);
+    focusNeighborhood(event.target);
   });
 
   cyInstance.on("unselect", "node", () => {
     if (cyInstance.$("node:selected").length === 0) {
       selectedTaskId = null;
       renderTaskCard(null);
+      resetGraphFocus();
     }
   });
 }
@@ -798,6 +794,7 @@ function renderTaskCard(task) {
 
 function clearGraph() {
   if (cyInstance) {
+    resetGraphFocus(false);
     cyInstance.elements().remove();
   }
   dom.graphEmpty.hidden = false;
@@ -816,6 +813,45 @@ function clearSelection() {
   }
   selectedTaskId = null;
   renderTaskCard(null);
+}
+
+function focusNeighborhood(node) {
+  if (!cyInstance || !node || node.empty()) {
+    return;
+  }
+
+  const neighborhood = node.closedNeighborhood();
+
+  cyInstance.batch(() => {
+    cyInstance.elements().removeClass("dimmed");
+    cyInstance.elements().difference(neighborhood).addClass("dimmed");
+  });
+
+  if (neighborhood && neighborhood.length) {
+    cyInstance.animate({
+      fit: { eles: neighborhood, padding: 80 },
+      duration: 250,
+    });
+  }
+}
+
+function resetGraphFocus(animate = true) {
+  if (!cyInstance) {
+    return;
+  }
+
+  cyInstance.batch(() => {
+    cyInstance.elements().removeClass("dimmed");
+  });
+
+  if (animate) {
+    cyInstance.animate({
+      fit: { eles: cyInstance.elements(), padding: 80 },
+      duration: 250,
+    });
+  } else {
+    cyInstance.fit(undefined, 80);
+  }
 }
 
 window.addEventListener("beforeunload", () => {
