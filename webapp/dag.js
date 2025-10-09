@@ -47,6 +47,16 @@ let cyInstance = null;
 let selectedTaskId = null;
 let downloadUrl = null;
 let downloadFilename = "cps_tasks.json";
+let zoomStyleUpdateScheduled = false;
+
+const ZOOM_STYLE_DEFAULTS = {
+  baseFontSize: 12,
+  focusFontBonus: 2,
+  minFontSize: 11,
+  maxFontSize: 28,
+  baseOutlineWidth: 4,
+  minOutlineWidth: 1.2,
+};
 
 init();
 
@@ -522,6 +532,7 @@ function updateGraph() {
   });
   layout.run();
   cyInstance.fit(undefined, 80);
+  scheduleZoomStyleUpdate();
 
   if (selectedTaskId && nodeMap.has(selectedTaskId)) {
     cyInstance.$id(selectedTaskId).select();
@@ -540,7 +551,9 @@ function ensureCy() {
   cyInstance = cytoscape({
     container: dom.graph,
     elements: [],
-    wheelSensitivity: 0.2,
+    wheelSensitivity: 0.25,
+    minZoom: 0.2,
+    maxZoom: 6,
     style: [
       {
         selector: "core",
@@ -581,7 +594,7 @@ function ensureCy() {
           "shadow-color": "rgba(37, 99, 235, 0.28)",
           "shadow-offset-x": 0,
           "shadow-offset-y": 4,
-          "text-outline-color": "rgba(15,23,42,0.7)",
+          "text-outline-color": "rgba(15,23,42,0.45)",
         },
       },
       {
@@ -609,7 +622,7 @@ function ensureCy() {
           "background-color": "#f43f5e",
           "border-color": "#e11d48",
           color: "#ffffff",
-          "text-outline-color": "rgba(15,23,42,0.7)",
+          "text-outline-color": "rgba(15,23,42,0.45)",
         },
       },
       {
@@ -675,6 +688,79 @@ function ensureCy() {
       resetGraphFocus();
     }
   });
+
+  cyInstance.on("zoom", scheduleZoomStyleUpdate);
+  cyInstance.on("resize", scheduleZoomStyleUpdate);
+  scheduleZoomStyleUpdate();
+}
+
+function scheduleZoomStyleUpdate() {
+  if (!cyInstance) {
+    return;
+  }
+  if (zoomStyleUpdateScheduled) {
+    return;
+  }
+  zoomStyleUpdateScheduled = true;
+  requestAnimationFrame(() => {
+    zoomStyleUpdateScheduled = false;
+    applyZoomResponsiveStyles();
+  });
+}
+
+function applyZoomResponsiveStyles() {
+  if (!cyInstance) {
+    return;
+  }
+
+  const {
+    baseFontSize,
+    focusFontBonus,
+    minFontSize,
+    maxFontSize,
+    baseOutlineWidth,
+    minOutlineWidth,
+  } = ZOOM_STYLE_DEFAULTS;
+
+  const zoom = Math.max(cyInstance.zoom(), 0.1);
+  const zoomFactor = Math.sqrt(zoom);
+  const baseFont = clamp(baseFontSize * zoomFactor, minFontSize, maxFontSize);
+  const focusFont = clamp(
+    (baseFontSize + focusFontBonus) * zoomFactor,
+    minFontSize + focusFontBonus,
+    maxFontSize + focusFontBonus
+  );
+  const outlineWidth = clamp(baseOutlineWidth / zoomFactor, minOutlineWidth, baseOutlineWidth);
+  const focusOutlineWidth = clamp(
+    (baseOutlineWidth - 1) / zoomFactor,
+    minOutlineWidth,
+    baseOutlineWidth - 0.5
+  );
+
+  const style = cyInstance.style();
+  style
+    .selector("node")
+    .style("font-size", `${baseFont}px`)
+    .style("text-outline-width", outlineWidth);
+  style
+    .selector("node.context")
+    .style("font-size", `${baseFont}px`)
+    .style("text-outline-width", outlineWidth);
+  style
+    .selector("node.lego-mismatch")
+    .style("font-size", `${baseFont}px`)
+    .style("text-outline-width", outlineWidth);
+  style
+    .selector("node.focus")
+    .style("font-size", `${focusFont}px`)
+    .style("text-outline-width", focusOutlineWidth)
+    .style("text-outline-color", "rgba(15,23,42,0.45)");
+  style
+    .selector("node.focus.lego-mismatch")
+    .style("font-size", `${focusFont}px`)
+    .style("text-outline-width", focusOutlineWidth)
+    .style("text-outline-color", "rgba(15,23,42,0.45)");
+  style.update();
 }
 
 function formatNodeLabel(task) {
@@ -725,6 +811,10 @@ function wrapLabelText(text, maxLineLength = 22) {
   }
 
   return lines.join("\n");
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
 }
 
 function localeCompare(a, b) {
@@ -828,11 +918,16 @@ function focusNeighborhood(node) {
   });
 
   if (neighborhood && neighborhood.length) {
-    cyInstance.animate({
-      fit: { eles: neighborhood, padding: 80 },
-      duration: 250,
-    });
+    cyInstance.animate(
+      {
+        fit: { eles: neighborhood, padding: 80 },
+        duration: 250,
+      },
+      { complete: scheduleZoomStyleUpdate }
+    );
   }
+
+  scheduleZoomStyleUpdate();
 }
 
 function resetGraphFocus(animate = true) {
@@ -845,13 +940,18 @@ function resetGraphFocus(animate = true) {
   });
 
   if (animate) {
-    cyInstance.animate({
-      fit: { eles: cyInstance.elements(), padding: 80 },
-      duration: 250,
-    });
+    cyInstance.animate(
+      {
+        fit: { eles: cyInstance.elements(), padding: 80 },
+        duration: 250,
+      },
+      { complete: scheduleZoomStyleUpdate }
+    );
   } else {
     cyInstance.fit(undefined, 80);
   }
+
+  scheduleZoomStyleUpdate();
 }
 
 window.addEventListener("beforeunload", () => {
